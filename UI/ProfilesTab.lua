@@ -46,6 +46,31 @@ function ns.BuildProfilesTab(scroll)
         if tabs and tabs.SelectTab then tabs:SelectTab("profiles") end
     end
 
+    -- ── 共享配置区域 ──────────────────────────────────────────────────
+    UI.AddHeading(scroll, L.sharedProfile)
+
+    local sharedDesc = AceGUI:Create("Label")
+    sharedDesc:SetText("|cffaaaaaa" .. L.sharedProfileDesc .. "|r")
+    sharedDesc:SetFullWidth(true)
+    sharedDesc:SetFontObject(GameFontHighlightSmall)
+    scroll:AddChild(sharedDesc)
+
+    local sharedToggle = AceGUI:Create("CheckBox")
+    sharedToggle:SetLabel("|cffffd200" .. L.sharedProfileEnable .. "|r")
+    sharedToggle:SetValue(ns:GetUseSharedProfile())
+    sharedToggle:SetFullWidth(true)
+    sharedToggle:SetCallback("OnValueChanged", function(_, _, val)
+        ns:SetUseSharedProfile(val)
+        if val then
+            print("|cff00ccff[CDFlow]|r " .. L.sharedProfileOn)
+        else
+            print("|cff00ccff[CDFlow]|r " .. format(L.sharedProfileOff, ns._charKey))
+        end
+        RefreshTab()
+    end)
+    scroll:AddChild(sharedToggle)
+    -- ─────────────────────────────────────────────────────────────────
+
     local desc = AceGUI:Create("Label")
     desc:SetText("|cffaaaaaa" .. L.profileDesc .. "|r")
     desc:SetFullWidth(true)

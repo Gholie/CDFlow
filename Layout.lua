@@ -27,8 +27,6 @@ local VIEWER_KEY = {
     BuffIconCooldownViewer  = "buffs",
 }
 
-local restoringViewer = {}
-
 ------------------------------------------------------
 -- 工具函数
 ------------------------------------------------------
@@ -41,26 +39,24 @@ local function IsReady(viewer)
 end
 
 -- 收集所有图标帧（含隐藏），按 layoutIndex 排序。
--- 优先 itemFramePool：CENTER 模式下帧已 re-parent 到 UIParent，
--- GetChildren() 找不到它们，itemFramePool 仍能枚举到。
+-- 使用 GetChildren() 收集（图标始终为 viewer 子帧，不 re-parent）。
+-- itemFramePool 作为 fallback（兼容自定义分组 re-parent 到 group container 的帧）。
 local function CollectAllIcons(viewer)
     local all  = {}
     local seen = {}
 
-    if viewer.itemFramePool then
-        for frame in viewer.itemFramePool:EnumerateActive() do
-            if frame and frame.Icon then
-                seen[frame] = true
-                all[#all + 1] = frame
-            end
+    for _, child in ipairs({ viewer:GetChildren() }) do
+        if child and child.Icon then
+            seen[child] = true
+            all[#all + 1] = child
         end
     end
 
-    -- fallback：GetChildren 补充池外帧（兼容无 itemFramePool 情况）
-    if #all == 0 then
-        for _, child in ipairs({ viewer:GetChildren() }) do
-            if child and child.Icon and not seen[child] then
-                all[#all + 1] = child
+    -- fallback：itemFramePool 补充已被分组 re-parent 的帧
+    if viewer.itemFramePool then
+        for frame in viewer.itemFramePool:EnumerateActive() do
+            if frame and frame.Icon and not seen[frame] then
+                all[#all + 1] = frame
             end
         end
     end
@@ -81,11 +77,16 @@ local function SplitVisible(allIcons)
     local hasSuppressed = false
     for slot, icon in ipairs(allIcons) do
         if icon:IsShown() then
-            if suppressed and suppressed[icon.cooldownID] then
+            local iconTex = icon.Icon and icon.Icon:GetTexture()
+            if iconTex == nil then
+                icon:SetAlpha(0)
+                icon:ClearAllPoints()
+                icon:SetPoint("CENTER", UIParent, "CENTER", -5000, 0)
+            elseif suppressed and suppressed[icon.cooldownID] then
                 hasSuppressed = true
                 icon:SetAlpha(0)
                 icon:ClearAllPoints()
-                icon:SetPoint("CENTER", icon:GetParent(), "CENTER", -5000, 0)
+                icon:SetPoint("CENTER", UIParent, "CENTER", -5000, 0)
             else
                 icon:SetAlpha(1)
                 visible[#visible + 1] = icon
@@ -131,6 +132,29 @@ end
 -- 供 Layout/TrackedBars.lua 使用
 Layout._SetPointCached = SetPointCached
 
+local function EnsureSingleLineStableFrameSize(viewer, cfg, isH, baseW, baseH)
+    if not (viewer and cfg and baseW and baseH) then return end
+    local reserveSlots = viewer.iconLimit or 20
+    if reserveSlots < 1 then reserveSlots = 20 end
+
+    local targetW, targetH
+    if isH then
+        targetW = reserveSlots * (baseW + cfg.spacingX) - cfg.spacingX
+        targetH = baseH
+    else
+        targetW = baseW
+        targetH = reserveSlots * (baseH + cfg.spacingY) - cfg.spacingY
+    end
+
+    targetW = math.max(targetW, baseW)
+    targetH = math.max(targetH, baseH)
+
+    local curW, curH = viewer:GetWidth(), viewer:GetHeight()
+    if not curW or not curH or math.abs(curW - targetW) >= 1 or math.abs(curH - targetH) >= 1 then
+        viewer:SetSize(targetW, targetH)
+    end
+end
+
 ------------------------------------------------------
 -- 同步 viewer 尺寸与实际图标边界框
 -- 使编辑模式的圈选区域与实际显示区域一致
@@ -157,7 +181,7 @@ local function UpdateViewerSizeToMatchIcons(viewer, icons)
 
     if left >= right or bottom >= top then return end
 
-    -- 已转换为 viewer 本地单位，直接使用（与 CMC 一致）
+    -- 已转换为 viewer 本地单位，直接使用
     local targetW = right - left
     local targetH = top - bottom
     local curW = viewer:GetWidth()
@@ -171,7 +195,6 @@ end
 -- 入口：根据查看器类型分发
 ------------------------------------------------------
 function Layout:RefreshViewer(viewerName)
-    if restoringViewer[viewerName] then return end
     local viewer = _G[viewerName]
     if not viewer or not IsReady(viewer) then return end
 
@@ -191,66 +214,168 @@ end
 
 ------------------------------------------------------
 -- 增益图标查看器
--- DEFAULT = 固定槽位（按 layoutIndex，有 buff 显示在对应位置）
--- CENTER  = 动态居中（仅可见 buff 紧凑排列并居中）
+-- DEFAULT = 固定槽位（紧凑排列，排除 suppressed/grouped 后重编号）
+-- CENTER  = 动态居中（图标保持为 viewer 子帧）
 ------------------------------------------------------
 function Layout:RefreshBuffViewer(viewer, cfg)
+    -- 防重入：SetSize → RefreshLayout → RefreshViewer 循环
+    if viewer._cdf_buffRefreshing then return end
+    viewer._cdf_buffRefreshing = true
+
     local db = ns.db
     local w, h = cfg.iconWidth, cfg.iconHeight
+
+    if ns.Visibility and ns.Visibility.IsViewerVisible
+        and not ns.Visibility:IsViewerVisible(viewer) then
+        viewer._cdf_buffRefreshing = false
+        return
+    end
 
     local isH = (viewer.isHorizontal ~= false)
     local iconDir = (viewer.iconDirection == 1) and 1 or -1
     local doCenter = (cfg.growDir == "CENTER")
+    local iconLimit = viewer.iconLimit or 20
+
+    -- 固定 viewer 尺寸：至少 400px，确保编辑模式预览区域足够大
+    local BUFF_VIEWER_MIN_SIZE = 400
+    if isH then
+        local blockW = iconLimit * (w + cfg.spacingX) - cfg.spacingX
+        local targetW = math.max(BUFF_VIEWER_MIN_SIZE, blockW)
+        local curW = viewer:GetWidth()
+        if not curW or math.abs(curW - targetW) >= 1 then
+            viewer:SetSize(targetW, h)
+        end
+    else
+        local blockH = iconLimit * (h + cfg.spacingY) - cfg.spacingY
+        local targetH = math.max(BUFF_VIEWER_MIN_SIZE, blockH)
+        local curH = viewer:GetHeight()
+        if not curH or math.abs(curH - targetH) >= 1 then
+            viewer:SetSize(w, targetH)
+        end
+    end
+
+    -- 用户 X/Y 偏移（替代编辑模式拖拽）
+    local userOffX = cfg.buffOffsetX or 0
+    local userOffY = cfg.buffOffsetY or 0
+    viewer._cdf_userOffX = userOffX
+    viewer._cdf_userOffY = userOffY
 
     local allIcons = CollectAllIcons(viewer)
-    local visible, slotOf = SplitVisible(allIcons)
-    if #visible == 0 then
+
+    -- 统一分类：suppressed / grouped / main（含 hidden）
+    local suppressed = ns.cdmSuppressedCooldownIDs
+    local hasGroups = self.GetGroupIdxForIcon ~= nil
+        and ns.db and ns.db.buffGroups and #ns.db.buffGroups > 0
+
+    local mainAll     = {}   -- 主组全部帧（含 hidden）
+    local mainVisible = {}   -- 主组可见帧
+    local groupBuckets = {}  -- {[groupIdx] = {icons}}
+    local visibleSet   = {}  -- 所有可见帧（含分组），用于高亮判断
+    local hasNilTex    = false -- 有帧显示但贴图未加载，需要延迟重试
+
+    for idx, icon in ipairs(allIcons) do
+        icon._cdf_buffViewer = true
+        local iconTex = icon.Icon and icon.Icon:GetTexture()
+        local isShown = icon:IsShown()
+
+        -- suppressed: 无论是否显示都排除（不计入任何组，不影响 mainAll 槽位计数）
+        if suppressed and suppressed[icon.cooldownID] then
+            icon._cdf_positioned = nil
+            if isShown then
+                icon:SetAlpha(0)
+                icon:ClearAllPoints()
+                icon:SetPoint("CENTER", UIParent, "CENTER", -5000, 0)
+            end
+        -- 分组: 无论是否显示都归入分组（不计入主组）
+        elseif hasGroups and self:GetGroupIdxForIcon(icon) then
+            local gIdx = self:GetGroupIdxForIcon(icon)
+            if icon:GetParent() ~= viewer then
+                icon:SetParent(viewer)
+            end
+            if isShown and iconTex then
+                icon:SetAlpha(1)
+                icon._cdf_positioned = true
+                groupBuckets[gIdx] = groupBuckets[gIdx] or {}
+                groupBuckets[gIdx][#groupBuckets[gIdx] + 1] = icon
+                visibleSet[icon] = true
+            elseif isShown then
+                hasNilTex = true
+                icon._cdf_positioned = nil
+                icon:SetAlpha(0)
+                icon:ClearAllPoints()
+                icon:SetPoint("CENTER", UIParent, "CENTER", -5000, 0)
+            end
+        else
+            if icon:GetParent() ~= viewer then
+                icon:SetParent(viewer)
+            end
+            mainAll[#mainAll + 1] = icon
+            icon._cdf_slot = #mainAll - 1
+
+            if isShown and iconTex == nil then
+                hasNilTex = true
+                icon._cdf_positioned = nil
+                icon:SetAlpha(0)
+                icon:ClearAllPoints()
+                icon:SetPoint("CENTER", UIParent, "CENTER", -5000, 0)
+            elseif isShown and iconTex ~= nil then
+                icon:SetAlpha(1)
+                icon._cdf_positioned = true
+                mainVisible[#mainVisible + 1] = icon
+                visibleSet[icon] = true
+            end
+        end
+    end
+
+    viewer._cdf_mainSlotCount = #mainAll
+
+    -- 有帧已显示但贴图尚未加载（reload 后首次出现），递减延迟重试
+    if hasNilTex then
+        viewer._cdf_nilTexRetry = (viewer._cdf_nilTexRetry or 0) + 1
+        if viewer._cdf_nilTexRetry <= 5 and Layout.RequestBuffRefreshFromMB then
+            C_Timer.After(0.05 * viewer._cdf_nilTexRetry, Layout.RequestBuffRefreshFromMB)
+        end
+    else
+        viewer._cdf_nilTexRetry = 0
+    end
+
+    -- 帧就绪重试：有显示帧但数据未就绪时，短延迟后重新触发居中
+    local hasNotReady = false
+    for _, icon in ipairs(allIcons) do
+        if icon:IsShown() and not (icon.Icon and icon.Icon:GetTexture()) then
+            hasNotReady = true
+            break
+        end
+        if icon._cdf_provisionalUntil and icon._cdf_provisionalUntil > GetTime()
+            and not icon:IsShown() then
+            hasNotReady = true
+            break
+        end
+    end
+    if hasNotReady then
+        Layout.ScheduleBuffReadinessRetry()
+    else
+        Layout.ResetBuffReadinessRetry()
+    end
+
+    -- 无可见 buff 时清理高亮
+    if #mainVisible == 0 and not next(groupBuckets) then
         for _, icon in ipairs(allIcons) do
             if icon._cdf_buffGlowActive then
                 Style:HideBuffGlow(icon)
             end
         end
-        -- CENTER 模式下停止居中循环
-        if self.DisableBuffCentering then
-            self:DisableBuffCentering()
-        end
+        viewer._cdf_buffRefreshing = false
         return
     end
 
-    -- 将 visible 拆分为主组和各自定义分组
-    -- 使用 GetGroupIdxForIcon 进行多源技能ID匹配（含 base 归一化与帧级缓存）
-    local hasGroups = self.GetGroupIdxForIcon ~= nil
-        and ns.db and ns.db.buffGroups and #ns.db.buffGroups > 0
-    local mainVisible = visible
-    local groupBuckets = {}
-
-    if hasGroups then
-        mainVisible = {}
-        for _, icon in ipairs(visible) do
-            local gIdx = self:GetGroupIdxForIcon(icon)
-            if gIdx then
-                groupBuckets[gIdx] = groupBuckets[gIdx] or {}
-                groupBuckets[gIdx][#groupBuckets[gIdx] + 1] = icon
-            else
-                mainVisible[#mainVisible + 1] = icon
-            end
-        end
-    end
-
     local buffGlowCfg = db.buffGlow
-
-    -- 构建可见集合（含分组图标），用于高亮判断
-    local visibleSet = {}
-    for _, icon in ipairs(visible) do
-        visibleSet[icon] = true
-    end
 
     -- 增益高亮：仅在状态变化时更新，避免频繁 Stop/Start 导致闪烁
     if buffGlowCfg then
         local hasFilter = buffGlowCfg.spellFilter and next(buffGlowCfg.spellFilter)
         for _, icon in ipairs(allIcons) do
             local shouldGlow = visibleSet[icon] and buffGlowCfg.enabled
-            -- 技能ID过滤：有过滤列表时，仅对列表内的技能高亮
             if shouldGlow and hasFilter then
                 local spellID = Style.GetSpellIDFromIcon(icon)
                 shouldGlow = spellID and buffGlowCfg.spellFilter[spellID] or false
@@ -267,8 +392,11 @@ function Layout:RefreshBuffViewer(viewer, cfg)
         end
     end
 
-    -- 应用样式（含分组图标）
-    for _, icon in ipairs(visible) do
+    -- 技能可用高亮
+    Style:RefreshAvailHighlights(allIcons)
+
+    -- 应用样式（主组 + 分组所有可见图标）
+    for icon in pairs(visibleSet) do
         icon._cdf_viewerKey = "buffs"
         Style:ApplyIcon(icon, w, h, db.iconZoom, db.borderSize)
         Style:ApplyStack(icon, cfg.stack)
@@ -277,55 +405,97 @@ function Layout:RefreshBuffViewer(viewer, cfg)
         Style:ApplySwipeOverlay(icon)
     end
 
-    -- 主组定位
-    if doCenter then
-        -- CENTER 模式：启用 OnUpdate 居中循环
-        -- 循环内部负责采集、检测变化、像素级重新定位
-        if self.EnableBuffCentering then
-            self:EnableBuffCentering(viewer, cfg)
-        end
-    else
-        -- DEFAULT 模式：关闭居中循环（如切换自 CENTER 则还原父级），使用固定槽位
-        if self.DisableBuffCentering then
-            self:DisableBuffCentering()
-        end
-        if #mainVisible > 0 then
+    -- 主组定位（同步，不 re-parent，不 OnUpdate）
+    local mainCount = #mainAll
+    if #mainVisible > 0 then
+        if doCenter then
+            -- CENTER: 在 iconLimit 槽位内动态居中（与 viewer 物理宽度匹配）
             if isH then
-                self:LayoutBuffH(viewer, mainVisible, slotOf, w, h, cfg, iconDir)
+                self:LayoutBuffCenterH(viewer, mainVisible, iconLimit, w, h, cfg, iconDir)
             else
-                self:LayoutBuffV(viewer, mainVisible, slotOf, w, h, cfg, iconDir)
+                self:LayoutBuffCenterV(viewer, mainVisible, iconLimit, w, h, cfg, iconDir)
+            end
+        else
+            -- DEFAULT: 在 mainAll 槽位内固定定位（排除 suppressed/grouped）
+            if isH then
+                self:LayoutBuffDefaultH(viewer, mainVisible, mainCount, w, h, cfg, iconDir)
+            else
+                self:LayoutBuffDefaultV(viewer, mainVisible, mainCount, w, h, cfg, iconDir)
             end
         end
-        -- 注意：buff viewer 不调用 UpdateViewerSizeToMatchIcons。
-        -- 调用 viewer:SetSize() 会触发 WoW 内部 RefreshLayout → 我们的钩子 → 再次 RefreshViewer，
-        -- 形成反馈循环：每次循环 TOPLEFT 因尺寸变化而偏移，图标最终偏离编辑模式配置的位置。
-        -- Essential/Utility viewer 不受影响（各自在 RefreshCDViewer 末尾独立调用）。
     end
-
     -- 自定义分组定位（无论哪种模式，分组总是独立定位）
-    if hasGroups then
+    if hasGroups and next(groupBuckets) then
         self:RefreshBuffGroups(groupBuckets, w, h, cfg)
     end
+
+    -- 启动 OnUpdate 居中监控，持续检测 buff 可见性变化并自动修正位置
+    if #mainVisible > 0 or next(groupBuckets) then
+        Layout.EnableBuffCentering()
+    end
+
+    viewer._cdf_buffRefreshing = false
 end
 
--- Buff 水平布局（DEFAULT 模式：固定槽位，按 layoutIndex 排列）
--- CENTER 模式由 Layout/BuffCentering.lua 的 OnUpdate 循环处理。
-function Layout:LayoutBuffH(viewer, visible, slotOf, w, h, cfg, iconDir)
-    local anchor = "TOP" .. ((iconDir == 1) and "LEFT" or "RIGHT")
-    for _, icon in ipairs(visible) do
-        local x = slotOf[icon] * (w + cfg.spacingX) * iconDir
-        SetPointCached(icon, anchor, viewer, x, 0)
+------------------------------------------------------
+-- Buff 水平居中布局（CENTER 模式）
+-- 以 viewer CENTER 为锚点，可见图标在 iconLimit 槽位内动态居中
+------------------------------------------------------
+function Layout:LayoutBuffCenterH(viewer, visible, totalSlots, w, h, cfg, iconDir)
+    local count = #visible
+    local step = w + (cfg.spacingX or 2)
+    local offset = (totalSlots - count) / 2
+    local ox = viewer._cdf_userOffX or 0
+    local oy = viewer._cdf_userOffY or 0
+    for i, icon in ipairs(visible) do
+        local slot = offset + (i - 1)
+        local x = (2 * slot - totalSlots + 1) * step / 2 * iconDir
+        SetPointCached(icon, "CENTER", viewer, x + ox, oy)
     end
 end
 
--- Buff 垂直布局（DEFAULT 模式：固定槽位，与 CMC 一致）
--- CENTER 模式由 Layout/BuffCentering.lua 的 OnUpdate 循环处理。
-function Layout:LayoutBuffV(viewer, visible, slotOf, w, h, cfg, iconDir)
-    local vertDir = -iconDir   -- 垂直方向取反，与 CMC 一致
-    local anchor = (iconDir == 1) and "BOTTOMLEFT" or "TOPLEFT"
+------------------------------------------------------
+-- Buff 垂直居中布局（CENTER 模式）
+------------------------------------------------------
+function Layout:LayoutBuffCenterV(viewer, visible, totalSlots, w, h, cfg, iconDir)
+    local count = #visible
+    local step = h + (cfg.spacingY or 2)
+    local offset = (totalSlots - count) / 2
+    local ox = viewer._cdf_userOffX or 0
+    local oy = viewer._cdf_userOffY or 0
+    for i, icon in ipairs(visible) do
+        local slot = offset + (i - 1)
+        local y = (2 * slot - totalSlots + 1) * step / 2 * iconDir
+        SetPointCached(icon, "CENTER", viewer, ox, y + oy)
+    end
+end
+
+------------------------------------------------------
+-- Buff 水平固定布局（DEFAULT 模式：固定槽位，以 viewer CENTER 居中）
+-- 每个 buff 保持在系统分配的位置，buff 消失后槽位空出不自动补位
+------------------------------------------------------
+function Layout:LayoutBuffDefaultH(viewer, visible, totalSlots, w, h, cfg, iconDir)
+    local step = w + (cfg.spacingX or 2)
+    local ox = viewer._cdf_userOffX or 0
+    local oy = viewer._cdf_userOffY or 0
     for _, icon in ipairs(visible) do
-        local y = -(slotOf[icon]) * (h + cfg.spacingY) * vertDir
-        SetPointCached(icon, anchor, viewer, 0, y)
+        local slot = icon._cdf_slot or 0
+        local x = (2 * slot - totalSlots + 1) * step / 2 * iconDir
+        SetPointCached(icon, "CENTER", viewer, x + ox, oy)
+    end
+end
+
+------------------------------------------------------
+-- Buff 垂直固定布局（DEFAULT 模式：固定槽位，以 viewer CENTER 居中）
+------------------------------------------------------
+function Layout:LayoutBuffDefaultV(viewer, visible, totalSlots, w, h, cfg, iconDir)
+    local step = h + (cfg.spacingY or 2)
+    local ox = viewer._cdf_userOffX or 0
+    local oy = viewer._cdf_userOffY or 0
+    for _, icon in ipairs(visible) do
+        local slot = icon._cdf_slot or 0
+        local y = (2 * slot - totalSlots + 1) * step / 2 * iconDir
+        SetPointCached(icon, "CENTER", viewer, ox, y + oy)
     end
 end
 
@@ -339,17 +509,22 @@ end
 function Layout:RefreshCDViewer(viewer, cfg)
     local allIcons = CollectAllIcons(viewer)
     local visible, _ = SplitVisible(allIcons)
-    if #visible == 0 then return end
 
     local db = ns.db
     local isH = (viewer.isHorizontal ~= false)
     local iconDir = (viewer.iconDirection == 1) and 1 or -1
 
+    local singleLineAdaptive = (cfg.iconsPerRow ~= nil and cfg.iconsPerRow <= 0)
     local limit = cfg.iconsPerRow
-    if not limit or limit <= 0 then
+    if singleLineAdaptive then
+        limit = #visible
+    elseif not limit or limit <= 0 then
         limit = viewer.iconLimit or #allIcons
         if limit <= 0 then limit = #visible end
     end
+
+    local viewerKey = VIEWER_KEY[viewer:GetName()]
+    if #visible == 0 then return end
 
     local rows = BuildRows(limit, visible)
     if #rows == 0 then return end
@@ -364,8 +539,11 @@ function Layout:RefreshCDViewer(viewer, cfg)
         }
     end
 
-    -- 应用样式
-    local viewerKey = VIEWER_KEY[viewer:GetName()]
+    if singleLineAdaptive and rowInfos[1] then
+        EnsureSingleLineStableFrameSize(viewer, cfg, isH, rowInfos[1].w, rowInfos[1].h)
+    end
+
+    -- 应用样式：注入帧与原生图标完全相同的样式流程
     for ri, row in ipairs(rows) do
         local info = rowInfos[ri]
         for _, icon in ipairs(row) do
@@ -373,10 +551,13 @@ function Layout:RefreshCDViewer(viewer, cfg)
             Style:ApplyIcon(icon, info.w, info.h, db.iconZoom, db.borderSize)
             Style:ApplyStack(icon, cfg.stack)
             Style:ApplyKeybind(icon, cfg)
-            Style:ApplyCooldownText(icon, cfg)
             Style:ApplySwipeOverlay(icon)
+            Style:ApplyCooldownText(icon, cfg)
         end
     end
+
+    -- 技能可用高亮
+    Style:RefreshAvailHighlights(allIcons)
 
     local growDir = cfg.growDir or "TOP"
 
@@ -386,24 +567,39 @@ function Layout:RefreshCDViewer(viewer, cfg)
         self:LayoutCDV(viewer, rows, rowInfos, cfg, iconDir, limit, growDir)
     end
 
-    -- 同步 viewer 尺寸与图标边界，使编辑模式圈选区域与实际显示一致
-    UpdateViewerSizeToMatchIcons(viewer, visible)
+    if not singleLineAdaptive then
+        UpdateViewerSizeToMatchIcons(viewer, visible)
+    end
 end
 
 ------------------------------------------------------
 -- 技能水平布局
--- growDir "TOP"    → anchor=TOPLEFT,  行从上往下叠（yOffset 递减）
--- growDir "BOTTOM" → anchor=BOTTOMLEFT, 行从下往上叠（yOffset 递增）
--- rowAnchor: LEFT/CENTER/RIGHT 行内水平锚点
+-- growDir "TOP"    → 行从上往下叠（yOffset 递减）
+-- growDir "BOTTOM" → 行从下往上叠（yOffset 递增）
+-- rowAnchor:
+--   LEFT   → 左侧固定，向右增长
+--   RIGHT  → 右侧固定，向左增长
+--   CENTER → 保持原有居中布局（受 iconDir 影响）
 ------------------------------------------------------
 function Layout:LayoutCDH(viewer, rows, rowInfos, cfg, iconDir, limit, growDir)
     local fromBottom = (growDir == "BOTTOM")
     local rowOffsetMod = fromBottom and 1 or -1
-    local rowAnchor = (fromBottom and "BOTTOM" or "TOP") .. ((iconDir == 1) and "LEFT" or "RIGHT")
+    local baseVert = fromBottom and "BOTTOM" or "TOP"
 
-    -- 参考宽度：第一行满行时的总宽度
+    -- 参考宽度：按当前布局中“最大行实际图标数”计算。
+    -- 这样当总图标数 < iconsPerRow 时，CENTER 仍按实际内容宽度居中。
     local refW = rowInfos[1].w
-    local refTotalW = limit * (refW + cfg.spacingX) - cfg.spacingX
+    local refCount = 0
+    for i = 1, #rows do
+        local count = #rows[i]
+        if count > refCount then
+            refCount = count
+        end
+    end
+    if refCount <= 0 then
+        refCount = limit
+    end
+    local refTotalW = refCount * (refW + cfg.spacingX) - cfg.spacingX
 
     local anchorMode = (cfg.rowAnchor == "LEFT" or cfg.rowAnchor == "RIGHT") and cfg.rowAnchor or "CENTER"
 
@@ -414,19 +610,25 @@ function Layout:LayoutCDH(viewer, rows, rowInfos, cfg, iconDir, limit, growDir)
         local rowContentW = count * (w + cfg.spacingX) - cfg.spacingX
 
         -- 行内水平锚点：左 / 中 / 右
-        -- iconDir=1(TOPLEFT): 正x向右; iconDir=-1(TOPRIGHT): 正x向左
-        local startX
+        -- LEFT/RIGHT 使用固定边作为锚点，确保增减图标时锚点边不漂移
+        local rowAnchor, startX, stepDir
         if anchorMode == "LEFT" then
-            startX = (iconDir == 1) and 0 or ((refTotalW - rowContentW) / 2)
+            rowAnchor = baseVert .. "LEFT"
+            startX = 0
+            stepDir = 1
         elseif anchorMode == "RIGHT" then
-            startX = (iconDir == 1) and (refTotalW - rowContentW) or 0
+            rowAnchor = baseVert .. "RIGHT"
+            startX = 0
+            stepDir = -1
         else
+            rowAnchor = baseVert .. ((iconDir == 1) and "LEFT" or "RIGHT")
             startX = ((refTotalW - rowContentW) / 2) * iconDir
+            stepDir = iconDir
         end
 
         local yOffset = yAccum * rowOffsetMod
         for i, icon in ipairs(row) do
-            local x = startX + (i - 1) * (w + cfg.spacingX) * iconDir
+            local x = startX + (i - 1) * (w + cfg.spacingX) * stepDir
             SetPointCached(icon, rowAnchor, viewer, x, yOffset)
         end
 
@@ -450,7 +652,17 @@ function Layout:LayoutCDV(viewer, rows, rowInfos, cfg, iconDir, limit, growDir)
     local colAnchor = vertPart .. horizPart
 
     local refH = rowInfos[1].h
-    local refTotalH = limit * (refH + cfg.spacingY) - cfg.spacingY
+    local refCount = 0
+    for i = 1, #rows do
+        local count = #rows[i]
+        if count > refCount then
+            refCount = count
+        end
+    end
+    if refCount <= 0 then
+        refCount = limit
+    end
+    local refTotalH = refCount * (refH + cfg.spacingY) - cfg.spacingY
 
     local xAccum = 0
     for ri, row in ipairs(rows) do

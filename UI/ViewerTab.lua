@@ -68,7 +68,7 @@ local function BuildTextOverlaySection(scroll, title, cfg, options)
         end
 
         UI.AddDropdown(container, L.position, UI.POS_ITEMS,
-            { "TOPLEFT", "TOPRIGHT", "TOP", "BOTTOMLEFT", "BOTTOMRIGHT", "CENTER" },
+            { "TOPLEFT", "TOPRIGHT", "TOP", "BOTTOMLEFT", "BOTTOM", "BOTTOMRIGHT", "CENTER" },
             function() return cfg.point end,
             function(v) cfg.point = v end)
 
@@ -247,6 +247,14 @@ function ns.BuildViewerTab(scroll, viewerKey, showPerRow, allowUnlimitedPerRow)
             { "CENTER", "DEFAULT" },
             function() return cfg.growDir end,
             function(v) cfg.growDir = v end)
+
+        UI.AddSlider(scroll, L.buffOffsetX, -400, 400, 1,
+            function() return cfg.buffOffsetX or 0 end,
+            function(v) cfg.buffOffsetX = v end)
+
+        UI.AddSlider(scroll, L.buffOffsetY, -400, 400, 1,
+            function() return cfg.buffOffsetY or 0 end,
+            function(v) cfg.buffOffsetY = v end)
     else
         UI.AddDropdown(scroll, L.growDir, UI.CD_GROW_ITEMS,
             { "TOP", "BOTTOM" },

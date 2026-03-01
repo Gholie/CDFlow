@@ -11,6 +11,19 @@ local AceGUI
 -- 模块级状态（同 MonitorBarsTab 的 selectedBarIndex）
 local selectedGroupIndex = 1
 local buffCatalogFrame   = nil
+local PLAYER_CLASS_TAG = select(2, UnitClass("player"))
+local CLASS_TAG_ORDER = {
+    "ALL", "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST",
+    "DEATHKNIGHT", "SHAMAN", "MAGE", "WARLOCK", "MONK",
+    "DRUID", "DEMONHUNTER", "EVOKER",
+}
+
+local function IsClassMatchedForCurrentPlayer(classTag)
+    if classTag == nil or classTag == "" or classTag == "ALL" then
+        return true
+    end
+    return classTag == PLAYER_CLASS_TAG
+end
 
 ------------------------------------------------------
 -- 内部工具
@@ -18,6 +31,19 @@ local buffCatalogFrame   = nil
 
 local function GetAceGUILib()
     return AceGUI or LibStub("AceGUI-3.0")
+end
+
+local function GetClassItems()
+    local items, order = {}, {}
+    items.ALL = L.classAll
+    order[#order + 1] = "ALL"
+    for i = 2, #CLASS_TAG_ORDER do
+        local classTag = CLASS_TAG_ORDER[i]
+        local className = (LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[classTag]) or classTag
+        items[classTag] = className
+        order[#order + 1] = classTag
+    end
+    return items, order
 end
 
 -- 重新刷新 Buff 查看器（分组变更后调用）
@@ -38,10 +64,12 @@ end
 local function GetGroupDropdownList(groups)
     local items, order = {}, {}
     for i, group in ipairs(groups) do
-        local name = (group.name and group.name ~= "") and group.name
-            or string.format(L.bgGroupTitle, i, "")
-        items[i]      = string.format("%d. %s", i, name)
-        order[#order + 1] = i
+        if IsClassMatchedForCurrentPlayer(group.class) then
+            local name = (group.name and group.name ~= "") and group.name
+                or string.format(L.bgGroupTitle, i, "")
+            items[i]      = string.format("%d. %s", i, name)
+            order[#order + 1] = i
+        end
     end
     return items, order
 end
@@ -139,6 +167,23 @@ local function BuildGroupConfig(container, groupIdx, rebuildTab)
     end)
     container:AddChild(layoutDD)
 
+    -- 载入职业
+    local classItems, classOrder = GetClassItems()
+    local classDD = aceGUI:Create("Dropdown")
+    classDD:SetLabel(L.bgLoadClass)
+    classDD:SetList(classItems, classOrder)
+    classDD:SetValue(group.class or "ALL")
+    classDD:SetFullWidth(true)
+    classDD:SetCallback("OnValueChanged", function(_, _, val)
+        group.class = val
+        if Layout.InitBuffGroups then
+            Layout:InitBuffGroups()
+        end
+        RefreshBuffView()
+        rebuildTab()
+    end)
+    container:AddChild(classDD)
+
     -- 当前坐标（只读显示，由拖动/滚轮更新）
     local posLabel = aceGUI:Create("Label")
     posLabel:SetFullWidth(true)
@@ -152,25 +197,6 @@ local function BuildGroupConfig(container, groupIdx, rebuildTab)
     nudgeHint:SetFullWidth(true)
     nudgeHint:SetFontObject(GameFontHighlightSmall)
     container:AddChild(nudgeHint)
-
-    -- 打开编辑模式按钮（不关闭设置面板，与 GeneralTab 实现一致）
-    local editModeBtn = aceGUI:Create("Button")
-    editModeBtn:SetText(L.openEditMode)
-    editModeBtn:SetFullWidth(true)
-    editModeBtn:SetCallback("OnClick", function()
-        if InCombatLockdown() then return end
-        local frame = _G.EditModeManagerFrame
-        if not frame then
-            local loader = (C_AddOns and C_AddOns.LoadAddOn) or LoadAddOn
-            if loader then loader("Blizzard_EditMode") end
-            frame = _G.EditModeManagerFrame
-        end
-        if frame then
-            if frame.CanEnterEditMode and not frame:CanEnterEditMode() then return end
-            if frame:IsShown() then HideUIPanel(frame) else ShowUIPanel(frame) end
-        end
-    end)
-    container:AddChild(editModeBtn)
 
     -- CDM 追踪提示
     local cdmHint = aceGUI:Create("Label")
@@ -319,8 +345,10 @@ function ns.BuildBuffGroupsTab(scroll)
     addBtn:SetFullWidth(true)
     addBtn:SetCallback("OnClick", function()
         local idx = #groups + 1
+        local playerClass = select(2, UnitClass("player"))
         groups[idx] = {
             name       = string.format("Group %d", idx),
+            class      = playerClass,
             horizontal = true,
             x          = 0,
             y          = -260 - (idx - 1) * 60,
@@ -332,7 +360,8 @@ function ns.BuildBuffGroupsTab(scroll)
     end)
     scroll:AddChild(addBtn)
 
-    if #groups == 0 then
+    local groupItems, groupOrder = GetGroupDropdownList(groups)
+    if #groupOrder == 0 then
         local emptyLabel = AceGUI:Create("Label")
         emptyLabel:SetText("\n|cffaaaaaa" .. L.bgNoGroups .. "|r")
         emptyLabel:SetFullWidth(true)
@@ -346,9 +375,15 @@ function ns.BuildBuffGroupsTab(scroll)
     heading:SetFullWidth(true)
     scroll:AddChild(heading)
 
-    local groupItems, groupOrder = GetGroupDropdownList(groups)
-    if selectedGroupIndex > #groups then
-        selectedGroupIndex = #groups
+    local selectedVisible = false
+    for _, idx in ipairs(groupOrder) do
+        if idx == selectedGroupIndex then
+            selectedVisible = true
+            break
+        end
+    end
+    if not selectedVisible then
+        selectedGroupIndex = groupOrder[1]
     end
 
     local groupDD = AceGUI:Create("Dropdown")

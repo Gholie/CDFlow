@@ -98,6 +98,16 @@ local function MigrateOldData(profileData)
         end
     end
     MigrateOldBarFields(profileData)
+
+    -- itemMonitor.items 格式迁移：裸 number → { type="item", id=N }
+    if profileData.itemMonitor and type(profileData.itemMonitor.items) == "table" then
+        local items = profileData.itemMonitor.items
+        for i, entry in ipairs(items) do
+            if type(entry) == "number" then
+                items[i] = { type = "item", id = entry }
+            end
+        end
+    end
 end
 
 ns.MigrateOldData = MigrateOldData

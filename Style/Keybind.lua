@@ -147,8 +147,17 @@ function Style:ApplyKeybind(button, cfg)
     end
 
     local keyText
-    if button.itemID then
-        -- 物品监控：仅使用手动指定的键位（manualByItem）
+    if button._im_entry then
+        -- 物品监控：按类型取 manualByItem / manualBySpell
+        local entry = button._im_entry
+        local id = entry.id
+        if entry.type == "spell" then
+            keyText = (kb.manualBySpell and (kb.manualBySpell[id] or kb.manualBySpell[tostring(id)])) or ""
+        else
+            keyText = (kb.manualByItem and (kb.manualByItem[id] or kb.manualByItem[tostring(id)])) or ""
+        end
+    elseif button.itemID then
+        -- 兼容：其他处设置的 itemID
         local itemID = button.itemID
         keyText = (kb.manualByItem and (kb.manualByItem[itemID] or kb.manualByItem[tostring(itemID)])) or ""
     else

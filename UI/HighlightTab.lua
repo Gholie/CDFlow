@@ -120,7 +120,7 @@ function ns.BuildHighlightTab(scroll)
 
         local dd = AceGUI:Create("Dropdown")
         dd:SetLabel(L.hlStyle)
-        dd:SetList(UI.HL_ITEMS, { "DEFAULT", "PIXEL", "AUTOCAST", "PROC", "BUTTON", "NONE" })
+        dd:SetList(UI.HL_ITEMS, { "PIXEL", "AUTOCAST", "PROC", "BUTTON", "NONE" })
         dd:SetValue(buffCfg.style)
         dd:SetFullWidth(true)
         dd:SetCallback("OnValueChanged", function(_, _, v)
@@ -213,6 +213,148 @@ function ns.BuildHighlightTab(scroll)
 
     if buffCfg.enabled then
         RebuildBuffOptions()
+    end
+
+    -- ──────────────────────────────────────────────
+    -- 技能可用高亮
+    -- ──────────────────────────────────────────────
+    local availCfg = ns.db.spellHighlight
+
+    local function refreshAvailHighlights()
+        Layout:RefreshAll()
+    end
+
+    UI.AddHeading(scroll, L.spellAvailGlow)
+
+    local availOptGroup
+    local RebuildAvailOptions
+
+    local availEnableCB = AceGUI:Create("CheckBox")
+    availEnableCB:SetLabel(L.enableSpellAvailGlow)
+    availEnableCB:SetValue(availCfg.enabled)
+    availEnableCB:SetFullWidth(true)
+    availEnableCB:SetCallback("OnValueChanged", function(_, _, v)
+        availCfg.enabled = v
+        refreshAvailHighlights()
+        if v then RebuildAvailOptions() else availOptGroup:ReleaseChildren() end
+        refreshScrollLayout()
+    end)
+    scroll:AddChild(availEnableCB)
+
+    availOptGroup = AceGUI:Create("InlineGroup")
+    availOptGroup:SetLayout("Flow")
+    availOptGroup:SetFullWidth(true)
+    scroll:AddChild(availOptGroup)
+
+    RebuildAvailOptions = function()
+        availOptGroup:ReleaseChildren()
+        if not availCfg.enabled then refreshScrollLayout(); return end
+
+        local combatCB = AceGUI:Create("CheckBox")
+        combatCB:SetLabel(L.spellAvailCombatOnly)
+        combatCB:SetValue(availCfg.combatOnly)
+        combatCB:SetFullWidth(true)
+        combatCB:SetCallback("OnValueChanged", function(_, _, v)
+            availCfg.combatOnly = v
+            refreshAvailHighlights()
+        end)
+        availOptGroup:AddChild(combatCB)
+
+        local styleDD = AceGUI:Create("Dropdown")
+        styleDD:SetLabel(L.hlStyle)
+        styleDD:SetList(UI.HL_ITEMS, { "PIXEL", "AUTOCAST", "PROC", "BUTTON", "NONE" })
+        styleDD:SetValue(availCfg.style)
+        styleDD:SetFullWidth(true)
+        styleDD:SetCallback("OnValueChanged", function(_, _, v)
+            availCfg.style = v
+            RebuildAvailOptions()
+            refreshAvailHighlights()
+        end)
+        availOptGroup:AddChild(styleDD)
+
+        BuildStyleOptions(availOptGroup, availCfg, refreshAvailHighlights)
+
+        local filterGroup = AceGUI:Create("InlineGroup")
+        filterGroup:SetTitle(L.spellAvailFilter)
+        filterGroup:SetFullWidth(true)
+        filterGroup:SetLayout("Flow")
+        availOptGroup:AddChild(filterGroup)
+
+        local hint = AceGUI:Create("Label")
+        hint:SetText("|cffaaaaaa" .. L.spellAvailFilterHint .. "|r")
+        hint:SetFullWidth(true)
+        hint:SetFontObject(GameFontHighlightSmall)
+        filterGroup:AddChild(hint)
+
+        if type(availCfg.spellFilter) ~= "table" then
+            availCfg.spellFilter = {}
+        end
+
+        local inputAvailID
+
+        local listLabel = AceGUI:Create("Label")
+        listLabel:SetFullWidth(true)
+        listLabel:SetFontObject(GameFontHighlightSmall)
+
+        local function RebuildAvailFilterList()
+            local ids = {}
+            for id in pairs(availCfg.spellFilter) do
+                ids[#ids + 1] = id
+            end
+            table.sort(ids)
+            local lines = { "|cff88ccff" .. L.spellAvailFilterTitle .. "|r" }
+            for _, id in ipairs(ids) do
+                lines[#lines + 1] = tostring(id)
+            end
+            if #ids == 0 then
+                lines[#lines + 1] = "|cff888888-|r"
+            end
+            listLabel:SetText(table.concat(lines, "\n"))
+        end
+
+        local idBox = AceGUI:Create("EditBox")
+        idBox:SetLabel(L.spellID)
+        idBox:SetText("")
+        idBox:SetFullWidth(true)
+        idBox:SetCallback("OnEnterPressed", function(_, _, v)
+            inputAvailID = tonumber(v)
+        end)
+        filterGroup:AddChild(idBox)
+
+        local addBtn = AceGUI:Create("Button")
+        addBtn:SetText(L.spellAvailFilterAdd)
+        addBtn:SetFullWidth(true)
+        addBtn:SetCallback("OnClick", function()
+            local id = inputAvailID or tonumber(idBox.editbox:GetText())
+            if id and id > 0 then
+                availCfg.spellFilter[id] = true
+                RebuildAvailFilterList()
+                refreshAvailHighlights()
+            end
+        end)
+        filterGroup:AddChild(addBtn)
+
+        local removeBtn = AceGUI:Create("Button")
+        removeBtn:SetText(L.spellAvailFilterRemove)
+        removeBtn:SetFullWidth(true)
+        removeBtn:SetCallback("OnClick", function()
+            local id = inputAvailID or tonumber(idBox.editbox:GetText())
+            if id and id > 0 then
+                availCfg.spellFilter[id] = nil
+                RebuildAvailFilterList()
+                refreshAvailHighlights()
+            end
+        end)
+        filterGroup:AddChild(removeBtn)
+
+        filterGroup:AddChild(listLabel)
+        RebuildAvailFilterList()
+
+        refreshScrollLayout()
+    end
+
+    if availCfg.enabled then
+        RebuildAvailOptions()
     end
 
     refreshScrollLayout()

@@ -4,6 +4,75 @@ local _, ns = ...
 local L = ns.L
 local AceGUI
 
+local CHANGELOG = {
+    {
+        "v3.2.1",
+        "监控条添加仅御龙术时显示选项，可制作御龙术监控条",
+        "新增小地图按钮"
+    },
+    { 
+        "v3.2.0",
+        "增加buff居中持续监测系统，防止更新不及时",
+        "高亮特效添加技能可用高亮配置",
+        "若干bug修复及体验优化",
+    },
+    { 
+        "v3.1.0",
+        "修复BUFF中间增长异常和固定模式bug",
+    },
+    { 
+        "v3.0.0",
+        "新增Buff分组功能",
+        "新增物品监控模块，追踪状态栏拆分出单独模块",
+        "若干bug修复及体验优化",
+    },
+}
+
+local function BuildChangelog(entries)
+    local lines = {}
+    for _, entry in ipairs(entries) do
+        lines[#lines + 1] = "|cffffd100" .. entry[1] .. "|r"
+        for i = 2, #entry do
+            lines[#lines + 1] = "  • " .. entry[i]
+        end
+        lines[#lines + 1] = ""
+    end
+    return table.concat(lines, "\n")
+end
+
+local CHANGELOG_TEXT = BuildChangelog(CHANGELOG)
+
+local function ShowChangelog()
+    if ns._changelogFrame then
+        ns._changelogFrame:Release()
+        ns._changelogFrame = nil
+        return
+    end
+
+    local clFrame = AceGUI:Create("Frame")
+    clFrame:SetTitle(L.changelog)
+    clFrame:SetWidth(400)
+    clFrame:SetHeight(500)
+    clFrame:SetLayout("Fill")
+    clFrame:SetCallback("OnClose", function(widget)
+        widget:Release()
+        ns._changelogFrame = nil
+    end)
+    clFrame:EnableResize(false)
+
+    local scroll = AceGUI:Create("ScrollFrame")
+    scroll:SetLayout("List")
+    clFrame:AddChild(scroll)
+
+    local label = AceGUI:Create("Label")
+    label:SetFullWidth(true)
+    label:SetFontObject(GameFontHighlight)
+    label:SetText(CHANGELOG_TEXT)
+    scroll:AddChild(label)
+
+    ns._changelogFrame = clFrame
+end
+
 local function GetTabList()
     local tabs = {
         { value = "general", text = L.general },
@@ -43,7 +112,7 @@ local function OnTabSelected(container, _, group)
     elseif group == "essential" then
         ns.BuildViewerTab(scroll, "essential", true, false)
     elseif group == "utility" then
-        ns.BuildViewerTab(scroll, "utility", true, false)
+        ns.BuildViewerTab(scroll, "utility", true, true)
     elseif group == "buffs" then
         ns.BuildViewerTab(scroll, "buffs", false, false)
     elseif group == "buffGroups" then
@@ -108,6 +177,21 @@ local function ToggleSettings()
     dragBar:SetScript("OnMouseUp", function() f:StopMovingOrSizing() end)
     dragBar:SetFrameLevel(f:GetFrameLevel() + 5)
 
+    local clBtn = CreateFrame("Button", nil, f)
+    clBtn:SetSize(70, 20)
+    clBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -10, -7)
+    clBtn:SetFrameLevel(dragBar:GetFrameLevel() + 1)
+    local clText = clBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    clText:SetAllPoints()
+    clText:SetText("|cff999999" .. L.changelog .. "|r")
+    clBtn:SetScript("OnEnter", function()
+        clText:SetText("|cffffffff" .. L.changelog .. "|r")
+    end)
+    clBtn:SetScript("OnLeave", function()
+        clText:SetText("|cff999999" .. L.changelog .. "|r")
+    end)
+    clBtn:SetScript("OnClick", ShowChangelog)
+
     frame.content:ClearAllPoints()
     frame.content:SetPoint("TOPLEFT", f, "TOPLEFT", 17, -38)
     frame.content:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -17, 40)
@@ -118,9 +202,68 @@ local function ToggleSettings()
     tabs:SetCallback("OnGroupSelected", OnTabSelected)
     frame:AddChild(tabs)
 
+    -- 底部快捷按钮：打开编辑模式 / 打开冷却管理器设置
+    local function DoOpenEditMode()
+        if InCombatLockdown() then
+            print(L.cdmCombatLocked)
+            return
+        end
+        local emFrame = _G.EditModeManagerFrame
+        if not emFrame then
+            local loader = (C_AddOns and C_AddOns.LoadAddOn) or LoadAddOn
+            if loader then loader("Blizzard_EditMode") end
+            emFrame = _G.EditModeManagerFrame
+        end
+        if emFrame then
+            if emFrame.CanEnterEditMode and not emFrame:CanEnterEditMode() then return end
+            if emFrame:IsShown() then HideUIPanel(emFrame) else ShowUIPanel(emFrame) end
+        end
+    end
+
+    local function DoOpenCDMSettings()
+        if InCombatLockdown() then
+            print(L.cdmCombatLocked)
+            return
+        end
+        local emFrame = _G.EditModeManagerFrame
+        if emFrame and emFrame:IsShown() then
+            print(L.cdmEditModeLocked)
+            return
+        end
+        C_Timer.After(0.05, function()
+            if CooldownViewerSettings and CooldownViewerSettings.ShowUIPanel then
+                CooldownViewerSettings:ShowUIPanel(false)
+            end
+        end)
+    end
+
+    -- 与 AceGUI 关闭按钮对齐：closebutton 位于 BOTTOMRIGHT(-27,17) 高20，中心 y=27
+    -- AceGUI Button 高度 24，底边 y=15 时中心 y=27，完全对齐
+    local btnEM = AceGUI:Create("Button")
+    btnEM:SetText(L.openEditMode)
+    btnEM:SetWidth(160)
+    btnEM.frame:SetParent(f)
+    btnEM.frame:ClearAllPoints()
+    btnEM.frame:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 14, 15)
+    btnEM.frame:SetFrameLevel(f:GetFrameLevel() + 3)
+    btnEM.frame:Show()
+    btnEM:SetCallback("OnClick", DoOpenEditMode)
+
+    local btnCDM = AceGUI:Create("Button")
+    btnCDM:SetText(L.openCDMSettings)
+    btnCDM:SetWidth(190)
+    btnCDM.frame:SetParent(f)
+    btnCDM.frame:ClearAllPoints()
+    btnCDM.frame:SetPoint("LEFT", btnEM.frame, "RIGHT", 8, 0)
+    btnCDM.frame:SetFrameLevel(f:GetFrameLevel() + 3)
+    btnCDM.frame:Show()
+    btnCDM:SetCallback("OnClick", DoOpenCDMSettings)
+
     tabs:SelectTab("general")
     ns._settingsFrame = frame
 end
+
+ns.ToggleSettings = ToggleSettings
 
 function ns:InitSettings()
     AceGUI = LibStub("AceGUI-3.0")

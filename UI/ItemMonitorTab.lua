@@ -1,9 +1,8 @@
--- 物品监控设置选项卡
+-- 物品监控设置选项卡（Group A：独立监控组）
 local _, ns = ...
 
 local L      = ns.L
 local UI     = ns.UI
-local Layout = ns.Layout  -- for Layout:RefreshAll (style changes)
 
 local function GetAceGUI()
     return LibStub("AceGUI-3.0")
@@ -14,7 +13,7 @@ local function GetIM()
 end
 
 ------------------------------------------------------
--- 冷却读秒区块（仿 ViewerTab BuildTextOverlaySection）
+-- 冷却读秒区块
 ------------------------------------------------------
 
 local function BuildCooldownTextSection(scroll)
@@ -85,7 +84,7 @@ local function BuildCooldownTextSection(scroll)
         end
 
         UI.AddDropdown(container, L.position, UI.POS_ITEMS,
-            { "TOPLEFT", "TOPRIGHT", "TOP", "BOTTOMLEFT", "BOTTOMRIGHT", "CENTER" },
+            { "TOPLEFT", "TOPRIGHT", "TOP", "BOTTOMLEFT", "BOTTOM", "BOTTOMRIGHT", "CENTER" },
             function() return cdCfg.point end,
             function(v)
                 cdCfg.point = v
@@ -113,7 +112,7 @@ local function BuildCooldownTextSection(scroll)
 end
 
 ------------------------------------------------------
--- 键位显示区块（仿 ViewerTab keybind + BuildTextOverlaySection）
+-- 键位显示区块
 ------------------------------------------------------
 
 local function BuildKeybindSection(scroll)
@@ -184,7 +183,7 @@ local function BuildKeybindSection(scroll)
         end
 
         UI.AddDropdown(container, L.position, UI.POS_ITEMS,
-            { "TOPLEFT", "TOPRIGHT", "TOP", "BOTTOMLEFT", "BOTTOMRIGHT", "CENTER" },
+            { "TOPLEFT", "TOPRIGHT", "TOP", "BOTTOMLEFT", "BOTTOM", "BOTTOMRIGHT", "CENTER" },
             function() return kb.point end,
             function(v)
                 kb.point = v
@@ -274,7 +273,7 @@ local function BuildItemCountSection(scroll)
 end
 
 ------------------------------------------------------
--- 物品列表
+-- 条目列表
 ------------------------------------------------------
 
 local function BuildItemList(scroll, rebuildTab)
@@ -282,6 +281,9 @@ local function BuildItemList(scroll, rebuildTab)
     local cfg    = ns.db.itemMonitor
     if not cfg.keybind or type(cfg.keybind.manualByItem) ~= "table" then
         if cfg.keybind then cfg.keybind.manualByItem = {} end
+    end
+    if not cfg.keybind or type(cfg.keybind.manualBySpell) ~= "table" then
+        if cfg.keybind then cfg.keybind.manualBySpell = {} end
     end
 
     if #cfg.items == 0 then
@@ -292,65 +294,77 @@ local function BuildItemList(scroll, rebuildTab)
         return
     end
 
-    for idx, itemID in ipairs(cfg.items) do
+    local IM = GetIM()
+    for idx, raw in ipairs(cfg.items) do
+        local entry
+        if type(raw) == "number" then
+            entry = { type = "item", id = raw }
+        else
+            entry = raw
+        end
+
+        local entryType = entry.type or "item"
+        local entryID   = entry.id
+
         local row = AceGUI:Create("SimpleGroup")
         row:SetFullWidth(true)
         row:SetLayout("Flow")
         scroll:AddChild(row)
 
         -- 图标
-        local iconID = C_Item.GetItemIconByID(itemID)
-        if iconID then
+        local iconTex
+        if entryType == "spell" then
+            iconTex = C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(entryID)
+        else
+            iconTex = C_Item.GetItemIconByID(entryID)
+        end
+        if iconTex then
             local iconWidget = AceGUI:Create("Icon")
-            iconWidget:SetImage(iconID)
+            iconWidget:SetImage(iconTex)
             iconWidget:SetImageSize(20, 20)
             iconWidget:SetWidth(28)
             row:AddChild(iconWidget)
         end
 
-        -- 名称
-        local name = C_Item.GetItemNameByID(itemID) or ("ID: " .. itemID)
+        -- 名称（含类型标记）
+        local displayName
+        if entryType == "spell" then
+            displayName = C_Spell.GetSpellName and C_Spell.GetSpellName(entryID) or ("Spell:" .. entryID)
+        else
+            displayName = C_Item.GetItemNameByID(entryID) or ("Item:" .. entryID)
+        end
+        local typeLabel = entryType == "spell" and "|cff88ddff[" .. L.imTypeSpell .. "]|r" or "|cffffcc88[" .. L.imTypeItem .. "]|r"
         local nameLbl = AceGUI:Create("Label")
-        nameLbl:SetText("|cffffffff" .. name .. "|r  |cff888888(" .. itemID .. ")|r")
-        nameLbl:SetWidth(220)
+        nameLbl:SetText(typeLabel .. " |cffffffff" .. displayName .. "|r  |cff888888(" .. entryID .. ")|r")
+        nameLbl:SetWidth(200)
         row:AddChild(nameLbl)
 
-        -- 键位输入框（手动指定该物品显示的键位文字）
-        local kb = cfg.keybind and cfg.keybind.manualByItem
+        -- 键位输入框（物品与技能均显示）
+        local kb = cfg.keybind and (entryType == "spell" and cfg.keybind.manualBySpell or cfg.keybind.manualByItem)
         local keyBox = AceGUI:Create("EditBox")
         keyBox:SetLabel(L.imKeyLabel)
         keyBox:SetWidth(72)
         keyBox:DisableButton(true)
-        keyBox:SetText(kb and (kb[itemID] or kb[tostring(itemID)] or "") or "")
-        keyBox:SetCallback("OnEnterPressed", function(_, _, text)
+        keyBox:SetText(kb and (kb[entryID] or kb[tostring(entryID)] or "") or "")
+        local function SaveKey(text)
             if not cfg.keybind then return end
-            if not cfg.keybind.manualByItem then cfg.keybind.manualByItem = {} end
-            local t = cfg.keybind.manualByItem
+            local t = entryType == "spell" and cfg.keybind.manualBySpell or cfg.keybind.manualByItem
+            if not t then
+                if entryType == "spell" then cfg.keybind.manualBySpell = {}; t = cfg.keybind.manualBySpell
+                else cfg.keybind.manualByItem = {}; t = cfg.keybind.manualByItem end
+            end
             if text and text:match("%S") then
-                t[itemID] = text
-                t[tostring(itemID)] = text
+                t[entryID] = text
+                t[tostring(entryID)] = text
             else
-                t[itemID] = nil
-                t[tostring(itemID)] = nil
+                t[entryID] = nil
+                t[tostring(entryID)] = nil
             end
             local im = GetIM()
             if im then im:Refresh() end
-        end)
-        keyBox:SetCallback("OnLeave", function()
-            if not cfg.keybind then return end
-            local text = keyBox:GetText()
-            if not cfg.keybind.manualByItem then cfg.keybind.manualByItem = {} end
-            local t = cfg.keybind.manualByItem
-            if text and text:match("%S") then
-                t[itemID] = text
-                t[tostring(itemID)] = text
-            else
-                t[itemID] = nil
-                t[tostring(itemID)] = nil
-            end
-            local im = GetIM()
-            if im then im:Refresh() end
-        end)
+        end
+        keyBox:SetCallback("OnEnterPressed", function(_, _, text) SaveKey(text) end)
+        keyBox:SetCallback("OnLeave", function() SaveKey(keyBox:GetText()) end)
         row:AddChild(keyBox)
 
         -- 移除按钮
@@ -393,12 +407,54 @@ function ns.BuildItemMonitorTab(scroll)
     end)
     scroll:AddChild(lockCB)
 
-    -- 添加物品
+    -- 添加条目（支持物品和技能）
     local addGroup = AceGUI:Create("InlineGroup")
     addGroup:SetTitle(L.imAddItem)
     addGroup:SetFullWidth(true)
     addGroup:SetLayout("Flow")
     scroll:AddChild(addGroup)
+
+    -- 类型选择（单选）
+    local selectedType = "item"  -- 本地状态
+
+    local typeGroup = AceGUI:Create("SimpleGroup")
+    typeGroup:SetFullWidth(true)
+    typeGroup:SetLayout("Flow")
+    addGroup:AddChild(typeGroup)
+
+    local typeLabel = AceGUI:Create("Label")
+    typeLabel:SetText(L.imEntryType .. ": ")
+    typeLabel:SetWidth(60)
+    typeGroup:AddChild(typeLabel)
+
+    local rbItem = AceGUI:Create("CheckBox")
+    rbItem:SetLabel(L.imTypeItem)
+    rbItem:SetValue(true)
+    rbItem:SetWidth(80)
+    typeGroup:AddChild(rbItem)
+
+    local rbSpell = AceGUI:Create("CheckBox")
+    rbSpell:SetLabel(L.imTypeSpell)
+    rbSpell:SetValue(false)
+    rbSpell:SetWidth(80)
+    typeGroup:AddChild(rbSpell)
+
+    rbItem:SetCallback("OnValueChanged", function(_, _, val)
+        if val then
+            selectedType = "item"
+            rbSpell:SetValue(false)
+        else
+            if selectedType == "item" then rbItem:SetValue(true) end
+        end
+    end)
+    rbSpell:SetCallback("OnValueChanged", function(_, _, val)
+        if val then
+            selectedType = "spell"
+            rbItem:SetValue(false)
+        else
+            if selectedType == "spell" then rbSpell:SetValue(true) end
+        end
+    end)
 
     local idBox = AceGUI:Create("EditBox")
     idBox:SetLabel(L.imItemID)
@@ -408,10 +464,19 @@ function ns.BuildItemMonitorTab(scroll)
     previewLbl:SetWidth(200)
     previewLbl:SetText("")
 
-    -- 实时预览（物品名称）
+    -- 实时预览
     idBox:SetCallback("OnTextChanged", function(_, _, text)
         local id = tonumber(text)
-        if id and id > 0 then
+        if not id or id <= 0 then previewLbl:SetText(""); return end
+
+        if selectedType == "spell" then
+            local name = C_Spell.GetSpellName and C_Spell.GetSpellName(id)
+            if name then
+                previewLbl:SetText("|cff00ff88" .. string.format(L.imSpellPreviewOk, name) .. "|r")
+            else
+                previewLbl:SetText("|cffaaaaaa" .. L.imItemLoading .. "|r")
+            end
+        else
             local name = C_Item.GetItemNameByID(id)
             if name then
                 previewLbl:SetText("|cff00ff88" .. string.format(L.imItemPreviewOk, name) .. "|r")
@@ -419,66 +484,46 @@ function ns.BuildItemMonitorTab(scroll)
                 C_Item.RequestLoadItemDataByID(id)
                 previewLbl:SetText("|cffaaaaaa" .. L.imItemLoading .. "|r")
             end
-        else
-            previewLbl:SetText("")
         end
     end)
 
-    -- Enter 确认添加
-    idBox:SetCallback("OnEnterPressed", function(_, _, text)
+    local function TryAdd(text)
         local id = tonumber(text)
         if not id or id <= 0 then return end
-        local name = C_Item.GetItemNameByID(id)
-        if not name then
-            previewLbl:SetText("|cffff4444" .. L.imItemPreviewErr .. "|r")
-            return
-        end
-        -- 去重检查
-        for _, existing in ipairs(cfg.items) do
-            if existing == id then
-                idBox:SetText("")
-                previewLbl:SetText("")
+
+        -- 技能验证
+        if selectedType == "spell" then
+            local name = C_Spell.GetSpellName and C_Spell.GetSpellName(id)
+            if not name then
+                previewLbl:SetText("|cffff4444" .. L.imSpellPreviewErr .. "|r")
+                return
+            end
+        else
+            local name = C_Item.GetItemNameByID(id)
+            if not name then
+                previewLbl:SetText("|cffff4444" .. L.imItemPreviewErr .. "|r")
                 return
             end
         end
-        cfg.items[#cfg.items + 1] = id
-        local im = GetIM(); if im then im:Init() end
+
+        local im = GetIM()
+        if im then im:AddEntry({ type = selectedType, id = id }) end
         idBox:SetText("")
         previewLbl:SetText("")
         RebuildTab()
-    end)
+    end
 
+    idBox:SetCallback("OnEnterPressed", function(_, _, text) TryAdd(text) end)
     addGroup:AddChild(idBox)
     addGroup:AddChild(previewLbl)
 
     local addBtn = AceGUI:Create("Button")
     addBtn:SetText(L.imAddItem)
     addBtn:SetWidth(120)
-    addBtn:SetCallback("OnClick", function()
-        local text = idBox:GetText()
-        local id   = tonumber(text)
-        if not id or id <= 0 then return end
-        local name = C_Item.GetItemNameByID(id)
-        if not name then
-            previewLbl:SetText("|cffff4444" .. L.imItemPreviewErr .. "|r")
-            return
-        end
-        for _, existing in ipairs(cfg.items) do
-            if existing == id then
-                idBox:SetText("")
-                previewLbl:SetText("")
-                return
-            end
-        end
-        cfg.items[#cfg.items + 1] = id
-        local im = GetIM(); if im then im:Init() end
-        idBox:SetText("")
-        previewLbl:SetText("")
-        RebuildTab()
-    end)
+    addBtn:SetCallback("OnClick", function() TryAdd(idBox:GetText()) end)
     addGroup:AddChild(addBtn)
 
-    -- 物品列表
+    -- 条目列表
     BuildItemList(scroll, RebuildTab)
 
     -- 布局配置
@@ -496,8 +541,8 @@ function ns.BuildItemMonitorTab(scroll)
         { "LEFT", "CENTER", "RIGHT" },
         function() return cfg.rowAnchor or "CENTER" end,
         function(v)
-            cfg.rowAnchor = v
-            local im = GetIM(); if im then im:Refresh() end
+            local im = GetIM()
+            if im then im:SetRowAnchor(v) end
         end)
 
     local iconsPerRowSlider = AceGUI:Create("Slider")
@@ -532,14 +577,14 @@ function ns.BuildItemMonitorTab(scroll)
             local im = GetIM(); if im then im:Refresh() end
         end)
 
-    UI.AddSlider(scroll, L.spacingX, 0, 20, 1,
+    UI.AddSlider(scroll, L.spacingX, 0, 500, 1,
         function() return cfg.spacingX end,
         function(v)
             cfg.spacingX = v
             local im = GetIM(); if im then im:Refresh() end
         end)
 
-    UI.AddSlider(scroll, L.spacingY, 0, 20, 1,
+    UI.AddSlider(scroll, L.spacingY, 0, 500, 1,
         function() return cfg.spacingY end,
         function(v)
             cfg.spacingY = v

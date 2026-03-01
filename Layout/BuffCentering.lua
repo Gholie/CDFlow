@@ -1,317 +1,414 @@
 local _, ns = ...
 
 ------------------------------------------------------
--- Buff CENTER 模式持续居中（OnUpdate 状态机）
---   1. OnUpdate 循环持续检测可见 buff 状态变化
---   2. 帧重新父级到 UIParent，viewer RefreshLayout 无法干扰
---   3. 以 viewer BOTTOM/LEFT 中点为锚点偏移，不依赖 viewer:GetWidth/Height()
---   4. 像素级精确计算，消除亚像素错位
---   5. 爆发（33ms）→ 看门狗（250ms）→ 空闲自关（2s）
+-- Buff 居中系统
+--
+-- OnUpdate 驱动，持续监控 buff 可见性变化并自动居中。
+-- burst 阶段 33ms 快速轮询，稳定后 250ms 看门狗，空闲 2 秒后关闭。
+-- 图标始终保持为 viewer 子帧，仅通过 SetPoint 重定位。
 ------------------------------------------------------
 
 local Layout = ns.Layout
+local Style  = ns.Style
+local floor  = math.floor
+
+local BURST_THROTTLE      = 0.033
+local WATCHDOG_THROTTLE   = 0.25
+local BURST_TICKS         = 5
+local IDLE_DISABLE_SEC    = 2.0
+local PROVISIONAL_WINDOW  = 0.25
+
+local centeringFrame        = CreateFrame("Frame")
+local centeringEnabled      = false
+local centeringDirty        = true
+local burstTicksRemaining   = 0
+local lastActivityTime      = 0
+local nextUpdateTime        = 0
+
+local lastVisibleSet        = {}
+local lastVisibleCount      = 0
+local lastLayoutIndex       = setmetatable({}, { __mode = "k" })
+local lastSlotMap           = setmetatable({}, { __mode = "k" })
 
 ------------------------------------------------------
--- 像素工具
+-- 偏移计算（保留原有公开接口，供其他模块使用）
 ------------------------------------------------------
-
-local function GetPixelSize()
-    local px = PixelUtil and PixelUtil.GetPixelToUIUnitFactor
-        and PixelUtil.GetPixelToUIUnitFactor() or 1
-    local scale = UIParent and UIParent:GetEffectiveScale() or 1
-    if scale and scale > 0 then px = px / scale end
-    return (px and px > 0) and px or 1
-end
-
-local function ToPx(v)
-    return math.floor((v or 0) / GetPixelSize() + 0.5)
-end
-
-local function ToUI(px)
-    return px * GetPixelSize()
-end
-
-------------------------------------------------------
--- 时序常量
-------------------------------------------------------
-
-local BURST_THROTTLE    = 0.033
-local WATCHDOG_THROTTLE = 0.25
-local BURST_TICKS       = 5
-local IDLE_DISABLE      = 2.0
-
-------------------------------------------------------
--- 模块级状态
-------------------------------------------------------
-
-local buffCenFrame     = CreateFrame("Frame")
-local nextUpdate       = 0
-local cenEnabled       = false
-local cenDirty         = true
-local cenBurstTicks    = 0
-local cenLastActivity  = 0
-
-local cenLastVisSet    = {}
-local cenLastVisCount  = 0
-local cenLastLayout    = setmetatable({}, { __mode = "k" })
-local cenLastSuppressVer = -1
-
--- 记录我们已 re-parent 到 UIParent 的帧，值为其原始 viewer
--- 弱 key 确保帧被 GC 时自动清理
-local cenManagedFrames = setmetatable({}, { __mode = "k" })
-
--- 当前关联 viewer / cfg（由 EnableBuffCentering 写入）
-local _viewer = nil
-local _cfg    = nil
-
--- suppressed 版本号：MonitorBars 重建 suppressed 集合后 +1，
--- 触发状态变化检测，驱动居中循环重排
-ns.suppressedVersion = ns.suppressedVersion or 0
-
--- 前向声明（CenterBuffsOnUpdate 内部调用）
-local DisableBuffCentering
-
-------------------------------------------------------
--- 采集主组可见图标
--- 排除：suppressed（hideFromCDM） + 自定义分组图标
-------------------------------------------------------
-
-local function CollectMainVisible(viewer)
-    if not viewer then return {} end
-
-    local suppressed = ns.cdmSuppressedCooldownIDs
-    local icons = {}
-
-    if viewer.itemFramePool then
-        for frame in viewer.itemFramePool:EnumerateActive() do
-            if frame and frame.Icon and frame:IsShown() then
-                if not (suppressed and suppressed[frame.cooldownID]) then
-                    if not (Layout.GetGroupIdxForIcon
-                            and Layout:GetGroupIdxForIcon(frame)) then
-                        icons[#icons + 1] = frame
-                    end
-                end
-            end
-        end
-    else
-        for _, child in ipairs({ viewer:GetChildren() }) do
-            if child and child.Icon and child:IsShown() then
-                if not (suppressed and suppressed[child.cooldownID]) then
-                    if not (Layout.GetGroupIdxForIcon
-                            and Layout:GetGroupIdxForIcon(child)) then
-                        icons[#icons + 1] = child
-                    end
-                end
-            end
-        end
-    end
-
-    table.sort(icons, function(a, b)
-        return (a.layoutIndex or 0) < (b.layoutIndex or 0)
-    end)
-    return icons
-end
-
-------------------------------------------------------
--- 状态变化检测
-------------------------------------------------------
-
-local function HasStateChanged(icons)
-    if cenDirty then return true end
-
-    if cenLastSuppressVer ~= ns.suppressedVersion then return true end
-
-    local count = #icons
-    if count ~= cenLastVisCount then return true end
-
+function Layout.CenteredRowXOffsets(count, itemWidth, padding, dir, totalSlots)
+    if not count or count <= 0 then return {} end
+    dir = dir or 1
+    local iconsMissing = (totalSlots or count) - count
+    local startX = ((itemWidth + padding) * iconsMissing / 2) * dir
+    local offsets = {}
     for i = 1, count do
-        if not cenLastVisSet[icons[i]] then return true end
+        offsets[i] = startX + (i - 1) * (itemWidth + padding) * dir
     end
+    return offsets
+end
 
+function Layout.CenteredColYOffsets(count, itemHeight, padding, dir, totalSlots)
+    if not count or count <= 0 then return {} end
+    dir = dir or 1
+    local iconsMissing = (totalSlots or count) - count
+    local startY = -((itemHeight + padding) * iconsMissing / 2) * dir
+    local offsets = {}
     for i = 1, count do
-        local frame = icons[i]
-        if cenLastLayout[frame] ~= (frame.layoutIndex or 0) then
-            return true
-        end
+        offsets[i] = startY - (i - 1) * (itemHeight + padding) * dir
     end
+    return offsets
+end
 
+------------------------------------------------------
+-- 可见集合变化检测
+------------------------------------------------------
+local function HasVisibleSetChanged(currentList)
+    local count = #currentList
+    if count ~= lastVisibleCount then return true end
+    for i = 1, count do
+        if not lastVisibleSet[currentList[i]] then return true end
+    end
     return false
 end
 
-------------------------------------------------------
--- 缓存状态
-------------------------------------------------------
-
-local function CacheState(icons)
-    cenLastSuppressVer = ns.suppressedVersion
-
-    wipe(cenLastVisSet)
-    local count = #icons
-    for i = 1, count do
-        cenLastVisSet[icons[i]] = true
+local function HasLayoutStateChanged(currentList)
+    for i = 1, #currentList do
+        local icon = currentList[i]
+        local li = icon.layoutIndex or 0
+        if lastLayoutIndex[icon] ~= li then return true end
+        local sl = icon._cdf_slot or 0
+        if lastSlotMap[icon] ~= sl then return true end
     end
-    cenLastVisCount = count
+    return false
+end
 
-    wipe(cenLastLayout)
-    for i = 1, count do
-        local frame = icons[i]
-        cenLastLayout[frame] = frame.layoutIndex or 0
+local function CacheVisibleState(currentList)
+    wipe(lastVisibleSet)
+    wipe(lastLayoutIndex)
+    wipe(lastSlotMap)
+    lastVisibleCount = #currentList
+    for i = 1, lastVisibleCount do
+        local icon = currentList[i]
+        lastVisibleSet[icon] = true
+        lastLayoutIndex[icon] = icon.layoutIndex or 0
+        lastSlotMap[icon] = icon._cdf_slot or 0
     end
 end
 
 ------------------------------------------------------
--- 像素级精确居中定位
---
--- 帧 re-parent 到 UIParent，以 viewer 的 BOTTOM（底边中点）或
--- LEFT（左边中点）为锚点做偏移，完全不依赖 viewer:GetWidth/Height()，
--- 避免 viewer 宽度为 0 或不正确时的偏移计算错误。
+-- 收集当前可见的主组 buff 帧
 ------------------------------------------------------
+local function CollectVisibleMainBuffs(viewer)
+    local result = {}
+    if not viewer or not viewer.itemFramePool then return result end
 
-local function PixelCenterBuffs(viewer, icons, cfg)
-    local count = #icons
-    if count == 0 or not viewer then return end
+    local suppressed = ns.cdmSuppressedCooldownIDs
+    local hasGroups = Layout.GetGroupIdxForIcon ~= nil
+        and ns.db and ns.db.buffGroups and #ns.db.buffGroups > 0
 
-    local w  = cfg.iconWidth  or 36
-    local h  = cfg.iconHeight or 36
+    for frame in viewer.itemFramePool:EnumerateActive() do
+        if frame and frame:IsShown() then
+            local iconTex = frame.Icon and frame.Icon:GetTexture()
+            if iconTex then
+                local isSuppressed = suppressed and suppressed[frame.cooldownID]
+                local isGrouped = hasGroups and Layout.GetGroupIdxForIcon
+                    and Layout:GetGroupIdxForIcon(frame)
+                if not isSuppressed and not isGrouped then
+                    result[#result + 1] = frame
+                end
+            end
+        end
+    end
+
+    table.sort(result, function(a, b)
+        return (a.layoutIndex or 0) < (b.layoutIndex or 0)
+    end)
+    return result
+end
+
+------------------------------------------------------
+-- 排除帧辅助
+------------------------------------------------------
+local function HideExcludedFrame(frame)
+    frame._cdf_positioned = nil
+    frame:SetAlpha(0)
+    frame:ClearAllPoints()
+    frame:SetPoint("CENTER", UIParent, "CENTER", -5000, 0)
+end
+
+local function IsFrameExcluded(frame)
+    local suppressed = ns.cdmSuppressedCooldownIDs
+    if suppressed and suppressed[frame.cooldownID] then
+        return "suppressed"
+    end
+    local hasGroups = Layout.GetGroupIdxForIcon ~= nil
+        and ns.db and ns.db.buffGroups and #ns.db.buffGroups > 0
+    if hasGroups then
+        local gIdx = Layout:GetGroupIdxForIcon(frame)
+        if gIdx then
+            return "grouped", gIdx
+        end
+    end
+    return nil
+end
+
+------------------------------------------------------
+-- 排除帧处理：suppressed 隐藏 + grouped 收集并定位到分组容器
+-- 替代原安全网，在一次 pool 遍历中完成两种逻辑
+------------------------------------------------------
+local function ProcessExcludedFrames(viewer, visibleLookup, w, h, cfg)
+    if not viewer or not viewer.itemFramePool then return false end
+    local groupBuckets = {}
+    local hasGrouped = false
+    for frame in viewer.itemFramePool:EnumerateActive() do
+        if frame and not visibleLookup[frame] and frame:IsShown() then
+            local iconTex = frame.Icon and frame.Icon:GetTexture()
+            if iconTex then
+                local excludeType, gIdx = IsFrameExcluded(frame)
+                if excludeType == "suppressed" then
+                    if frame:GetAlpha() > 0 and frame._cdf_positioned then
+                        HideExcludedFrame(frame)
+                    end
+                elseif excludeType == "grouped" and gIdx then
+                    groupBuckets[gIdx] = groupBuckets[gIdx] or {}
+                    groupBuckets[gIdx][#groupBuckets[gIdx] + 1] = frame
+                    hasGrouped = true
+                    if frame:GetAlpha() < 1 then frame:SetAlpha(1) end
+                    frame._cdf_positioned = true
+                end
+            end
+        end
+    end
+    if hasGrouped then
+        Layout:RefreshBuffGroups(groupBuckets, w, h, cfg)
+    end
+    return hasGrouped
+end
+
+------------------------------------------------------
+-- 快速居中定位（OnUpdate 回调核心）
+------------------------------------------------------
+local function CenterBuffsImmediate()
+    local now = GetTime()
+    local throttle = (centeringDirty or burstTicksRemaining > 0)
+        and BURST_THROTTLE or WATCHDOG_THROTTLE
+    if now < nextUpdateTime then return end
+    nextUpdateTime = now + throttle
+
+    local viewer = _G.BuffIconCooldownViewer
+    if not viewer or not viewer:IsShown() then return end
+
+    local cfg = ns.db and ns.db.buffs
+    if not cfg then return end
+    local doCenter = (cfg.growDir == "CENTER")
+    local w, h = cfg.iconWidth, cfg.iconHeight
+
+    local visible = CollectVisibleMainBuffs(viewer)
+    if #visible == 0 then
+        if lastVisibleCount > 0 then
+            CacheVisibleState(visible)
+        end
+        ProcessExcludedFrames(viewer, {}, w, h, cfg)
+        if burstTicksRemaining > 0 then
+            burstTicksRemaining = burstTicksRemaining - 1
+        elseif (now - lastActivityTime) >= IDLE_DISABLE_SEC then
+            Layout.DisableBuffCentering()
+        end
+        return
+    end
+
+    local changed = centeringDirty
+        or HasVisibleSetChanged(visible)
+        or HasLayoutStateChanged(visible)
+
+    if not changed then
+        if burstTicksRemaining > 0 then
+            burstTicksRemaining = burstTicksRemaining - 1
+        elseif (now - lastActivityTime) >= IDLE_DISABLE_SEC then
+            Layout.DisableBuffCentering()
+        end
+        return
+    end
+
     local isH = (viewer.isHorizontal ~= false)
+    local iconDir = (viewer.iconDirection == 1) and 1 or -1
+    local iconLimit = viewer.iconLimit or 20
 
-    -- 使用 viewer 的 CENTER 而非 BOTTOM/LEFT 作为锚点。
-    -- 当我们把图标 re-parent 到 UIParent 后，viewer 没有可见子节点，
-    -- WoW 布局引擎会把 viewer 高度/宽度缩为 0，导致 BOTTOM/LEFT 锚点
-    -- 漂移（偏高 iconHeight/2 或偏右 iconWidth/2）。
-    -- viewer 的 CENTER 由 WoW edit mode 以 CENTER 锚点定位，不随内容
-    -- 数量变化，因此是稳定的参考点
-
-    if isH then
-        local sx       = cfg.spacingX or 2
-        local itemWPx  = math.max(1, ToPx(w))
-        local itemHPx  = math.max(1, ToPx(h))
-        local gapPx    = math.max(0, ToPx(sx))
-        local stepPx   = itemWPx + gapPx
-        local rowWPx   = count * itemWPx + (count - 1) * gapPx
-        local halfRowPx = math.floor(rowWPx * 0.5)
-        -- 以 viewer CENTER 为参考，Y 偏移 -halfH 把 BOTTOMLEFT 定在
-        -- viewer 配置中心以下半个图标高度处
-        local halfHPx  = math.floor(itemHPx * 0.5)
-
-        for i, frame in ipairs(icons) do
-            local xPx = -halfRowPx + (i - 1) * stepPx
-            cenManagedFrames[frame] = viewer
-            frame:SetParent(UIParent)
-            frame:ClearAllPoints()
-            frame:SetPoint("BOTTOMLEFT", viewer, "CENTER", ToUI(xPx), ToUI(-halfHPx))
+    if doCenter then
+        for i, icon in ipairs(visible) do
+            icon._cdf_slot = i - 1
+        end
+        if isH then
+            Layout:LayoutBuffCenterH(viewer, visible, iconLimit, w, h, cfg, iconDir)
+        else
+            Layout:LayoutBuffCenterV(viewer, visible, iconLimit, w, h, cfg, iconDir)
         end
     else
-        local sy       = cfg.spacingY or 2
-        local itemWPx  = math.max(1, ToPx(w))
-        local itemHPx  = math.max(1, ToPx(h))
-        local gapPx    = math.max(0, ToPx(sy))
-        local stepPx   = itemHPx + gapPx
-        local colHPx   = count * itemHPx + (count - 1) * gapPx
-        local halfColPx = math.floor(colHPx * 0.5)
-        -- 以 viewer CENTER 为参考，X 偏移 -halfW 使图标水平居中
-        local halfWPx  = math.floor(itemWPx * 0.5)
+        local totalSlots = viewer._cdf_mainSlotCount or #visible
+        if isH then
+            Layout:LayoutBuffDefaultH(viewer, visible, totalSlots, w, h, cfg, iconDir)
+        else
+            Layout:LayoutBuffDefaultV(viewer, visible, totalSlots, w, h, cfg, iconDir)
+        end
+    end
 
-        for i, frame in ipairs(icons) do
-            local yPx = halfColPx - itemHPx - (i - 1) * stepPx
-            cenManagedFrames[frame] = viewer
-            frame:SetParent(UIParent)
+    local visibleLookup = {}
+    for _, icon in ipairs(visible) do
+        if icon:GetAlpha() < 1 then
+            icon:SetAlpha(1)
+        end
+        icon._cdf_positioned = true
+        visibleLookup[icon] = true
+    end
+
+    ProcessExcludedFrames(viewer, visibleLookup, w, h, cfg)
+
+    CacheVisibleState(visible)
+    centeringDirty = false
+    burstTicksRemaining = BURST_TICKS
+    lastActivityTime = now
+end
+
+------------------------------------------------------
+-- Enable / Disable / MarkDirty
+------------------------------------------------------
+function Layout.MarkBuffCenteringDirty()
+    centeringDirty = true
+    burstTicksRemaining = BURST_TICKS
+    lastActivityTime = GetTime()
+    nextUpdateTime = 0
+end
+
+function Layout.EnableBuffCentering()
+    Layout.MarkBuffCenteringDirty()
+    if not centeringEnabled then
+        centeringFrame:SetScript("OnUpdate", CenterBuffsImmediate)
+        centeringEnabled = true
+    end
+end
+
+function Layout.DisableBuffCentering()
+    if centeringEnabled then
+        centeringFrame:SetScript("OnUpdate", nil)
+        centeringEnabled = false
+    end
+    centeringDirty = true
+    burstTicksRemaining = 0
+    lastActivityTime = 0
+    nextUpdateTime = 0
+    lastVisibleCount = 0
+    wipe(lastVisibleSet)
+    wipe(lastLayoutIndex)
+    wipe(lastSlotMap)
+end
+
+------------------------------------------------------
+-- 临时放置：在 mixin hook 中立即计算近似位置
+-- 避免帧在等待完整刷新期间不可见
+------------------------------------------------------
+function Layout.ProvisionalPlaceBuffFrame(frame)
+    if not frame then return end
+    local viewer = _G.BuffIconCooldownViewer
+    if not viewer then return end
+
+    local cfg = ns.db and ns.db.buffs
+    if not cfg then return end
+
+    frame._cdf_provisionalUntil = GetTime() + PROVISIONAL_WINDOW
+
+    local excludeType, groupIdx = IsFrameExcluded(frame)
+    if excludeType == "suppressed" then
+        HideExcludedFrame(frame)
+        Layout.EnableBuffCentering()
+        return
+    end
+    if excludeType == "grouped" then
+        local container = Layout.buffGroupContainers and Layout.buffGroupContainers[groupIdx]
+        if container then
             frame:ClearAllPoints()
-            frame:SetPoint("BOTTOMLEFT", viewer, "CENTER", ToUI(-halfWPx), ToUI(yPx))
+            frame:SetPoint("CENTER", container, "CENTER", 0, 0)
+            frame:SetAlpha(1)
+            frame._cdf_positioned = true
+        else
+            HideExcludedFrame(frame)
         end
-    end
-end
-
-------------------------------------------------------
--- OnUpdate：居中状态机主循环
--- 节流 → 采集 → 检测变化 → 定位 → 缓存 → 爆发/空闲管理
-------------------------------------------------------
-
-local function CenterBuffsOnUpdate()
-    local now      = GetTime()
-    local throttle = (cenDirty or cenBurstTicks > 0)
-        and BURST_THROTTLE or WATCHDOG_THROTTLE
-    if now < nextUpdate then return end
-    nextUpdate = now + throttle
-
-    local viewer = _viewer
-    if not viewer then
-        DisableBuffCentering()
+        Layout.EnableBuffCentering()
         return
     end
 
-    local icons = CollectMainVisible(viewer)
-
-    if #icons == 0 then
-        DisableBuffCentering()
+    local doCenter = (cfg.growDir == "CENTER")
+    if not doCenter then
+        frame:SetAlpha(1)
+        frame._cdf_positioned = true
+        Layout.EnableBuffCentering()
         return
     end
 
-    local changed = HasStateChanged(icons)
-    if not changed then
-        if cenBurstTicks > 0 then
-            cenBurstTicks = cenBurstTicks - 1
-        elseif (now - cenLastActivity) >= IDLE_DISABLE then
-            DisableBuffCentering()
-        end
+    local isH = (viewer.isHorizontal ~= false)
+    local iconDir = (viewer.iconDirection == 1) and 1 or -1
+    local iconLimit = viewer.iconLimit or 20
+    local w, h = cfg.iconWidth, cfg.iconHeight
+    local ox = viewer._cdf_userOffX or (cfg.buffOffsetX or 0)
+    local oy = viewer._cdf_userOffY or (cfg.buffOffsetY or 0)
+
+    local visible = CollectVisibleMainBuffs(viewer)
+    local alreadyInList = false
+    for _, v in ipairs(visible) do
+        if v == frame then alreadyInList = true; break end
+    end
+    if not alreadyInList then
+        visible[#visible + 1] = frame
+        table.sort(visible, function(a, b)
+            return (a.layoutIndex or 0) < (b.layoutIndex or 0)
+        end)
+    end
+
+    local count = #visible
+    if count == 0 then return end
+
+    local frameIdx
+    for i, v in ipairs(visible) do
+        if v == frame then frameIdx = i; break end
+    end
+    if not frameIdx then return end
+
+    if isH then
+        local step = w + (cfg.spacingX or 2)
+        local offset = (iconLimit - count) / 2
+        local slot = offset + (frameIdx - 1)
+        local x = (2 * slot - iconLimit + 1) * step / 2 * iconDir
+        frame:ClearAllPoints()
+        frame:SetPoint("CENTER", viewer, "CENTER", x + ox, oy)
+    else
+        local step = h + (cfg.spacingY or 2)
+        local offset = (iconLimit - count) / 2
+        local slot = offset + (frameIdx - 1)
+        local y = (2 * slot - iconLimit + 1) * step / 2 * iconDir
+        frame:ClearAllPoints()
+        frame:SetPoint("CENTER", viewer, "CENTER", ox, y + oy)
+    end
+
+    frame:SetAlpha(1)
+    frame._cdf_positioned = true
+    Layout.EnableBuffCentering()
+end
+
+------------------------------------------------------
+-- 帧就绪重试：帧未准备好时短延迟后重新触发居中
+------------------------------------------------------
+local retryCount = 0
+local MAX_RETRIES = 3
+local RETRY_DELAY = 0.01
+
+function Layout.ScheduleBuffReadinessRetry()
+    if retryCount >= MAX_RETRIES then
+        retryCount = 0
         return
     end
-
-    PixelCenterBuffs(viewer, icons, _cfg or {})
-    CacheState(icons)
-    cenDirty        = false
-    cenBurstTicks   = BURST_TICKS
-    cenLastActivity = now
+    retryCount = retryCount + 1
+    C_Timer.After(RETRY_DELAY, function()
+        Layout.EnableBuffCentering()
+    end)
 end
 
-------------------------------------------------------
--- 公开 API（挂载到 Layout 命名空间）
-------------------------------------------------------
-
-local function MarkBuffCenteringDirty()
-    cenDirty        = true
-    cenBurstTicks   = BURST_TICKS
-    cenLastActivity = GetTime()
-    nextUpdate      = 0
+function Layout.ResetBuffReadinessRetry()
+    retryCount = 0
 end
-
--- 以 self:EnableBuffCentering(viewer, cfg) 调用时，第一个参数是 self（Layout 表），
--- 用 _ 忽略，第二、三个参数才是实际的 viewer 和 cfg。
-local function EnableBuffCentering(_, viewer, cfg)
-    _viewer = viewer
-    _cfg    = cfg
-    MarkBuffCenteringDirty()
-    if not cenEnabled then
-        buffCenFrame:SetScript("OnUpdate", CenterBuffsOnUpdate)
-        cenEnabled = true
-    end
-end
-
-DisableBuffCentering = function()
-    if cenEnabled then
-        buffCenFrame:SetScript("OnUpdate", nil)
-        cenEnabled = false
-    end
-
-    -- 将被管理帧还原到原始 viewer（切换 DEFAULT 模式时需要）
-    for frame, originalViewer in pairs(cenManagedFrames) do
-        if frame and frame.IsObjectType and frame:IsObjectType("Frame")
-            and originalViewer then
-            frame:SetParent(originalViewer)
-        end
-    end
-    wipe(cenManagedFrames)
-
-    cenDirty           = true
-    cenBurstTicks      = 0
-    cenLastActivity    = 0
-    nextUpdate         = 0
-    cenLastVisCount    = 0
-    cenLastSuppressVer = -1
-    wipe(cenLastVisSet)
-    wipe(cenLastLayout)
-end
-
-Layout.EnableBuffCentering    = EnableBuffCentering
-Layout.DisableBuffCentering   = DisableBuffCentering
-Layout.MarkBuffCenteringDirty = MarkBuffCenteringDirty

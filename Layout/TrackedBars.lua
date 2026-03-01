@@ -193,7 +193,11 @@ local function ApplyTrackedBarStyle(frame, cfg)
 
         bar:SetStatusBarTexture(barTexture)
         local bc = cfg.barColor
-        bar:SetStatusBarColor(bc[1] or 0.4, bc[2] or 0.6, bc[3] or 0.9, bc[4] or 1.0)
+        if bc then
+            bar:SetStatusBarColor(bc[1] or 0.4, bc[2] or 0.6, bc[3] or 0.9, bc[4] or 1.0)
+        else
+            bar:SetStatusBarColor(0.4, 0.6, 0.9, 1.0)
+        end
 
         -- 背景
         if not fd.barBackground then
@@ -220,7 +224,11 @@ local function ApplyTrackedBarStyle(frame, cfg)
                 local fontPath = ResolveFontPath(cfg.nameFontName)
                 nameText:SetFont(fontPath, cfg.nameFontSize or 12, ResolveOutline(cfg.nameOutline))
                 local nc = cfg.nameColor
-                nameText:SetTextColor(nc[1] or 1, nc[2] or 1, nc[3] or 1, nc[4] or 1)
+                if nc then
+                    nameText:SetTextColor(nc[1] or 1, nc[2] or 1, nc[3] or 1, nc[4] or 1)
+                else
+                    nameText:SetTextColor(1, 1, 1, 1)
+                end
                 nameText:SetShadowOffset(0, 0)
             else
                 nameText:Hide()
@@ -248,7 +256,11 @@ local function ApplyTrackedBarStyle(frame, cfg)
                 local fontPath = ResolveFontPath(cfg.durationFontName)
                 durationText:SetFont(fontPath, cfg.durationFontSize or 12, ResolveOutline(cfg.durationOutline))
                 local dc = cfg.durationColor
-                durationText:SetTextColor(dc[1] or 1, dc[2] or 1, dc[3] or 1, dc[4] or 1)
+                if dc then
+                    durationText:SetTextColor(dc[1] or 1, dc[2] or 1, dc[3] or 1, dc[4] or 1)
+                else
+                    durationText:SetTextColor(1, 1, 1, 1)
+                end
                 durationText:SetShadowOffset(0, 0)
             else
                 durationText:Hide()

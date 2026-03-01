@@ -4,7 +4,7 @@
 ## Notes-zhCN: 轻量级冷却管理器美化
 ## Notes-zhTW: 輕量級冷卻管理器美化
 ## Author: Vinky
-## Version: 3.0.3
+## Version: 3.2.0
 ## SavedVariables: CDFlowDB, CDFlowDB_Profiles
 ## SavedVariablesPerCharacter: CDFlowDB_Char
 ## IconTexture: Interface\AddOns\CDFlow\Media\logo
@@ -42,3 +42,4 @@ UI\ProfilesTab.lua
 UI\TrackedBarsTab.lua
 UI\MonitorBarsTab.lua
 UI\Settings.lua
+MinimapButton.lua

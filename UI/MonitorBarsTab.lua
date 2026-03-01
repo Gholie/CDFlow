@@ -12,6 +12,27 @@ local OUTLINE_ITEMS = {
     ["THICKOUTLINE"] = L.outThick,
 }
 
+local STRATA_ITEMS = {
+    ["BACKGROUND"] = L.mbStrataBackground,
+    ["LOW"]        = L.mbStrataLow,
+    ["MEDIUM"]     = L.mbStrataMedium,
+    ["HIGH"]       = L.mbStrataHigh,
+}
+local STRATA_ORDER = { "BACKGROUND", "LOW", "MEDIUM", "HIGH" }
+
+local TEXT_ANCHOR_ITEMS = {
+    ["TOPLEFT"]     = L.posTL,
+    ["TOP"]         = L.posTop,
+    ["TOPRIGHT"]    = L.posTR,
+    ["LEFT"]        = L.posLeft,
+    ["CENTER"]      = L.posCenter,
+    ["RIGHT"]       = L.posRight,
+    ["BOTTOMLEFT"]  = L.posBL,
+    ["BOTTOM"]      = L.posBottom,
+    ["BOTTOMRIGHT"] = L.posBR,
+}
+local TEXT_ANCHOR_ORDER = { "TOPLEFT", "TOP", "TOPRIGHT", "LEFT", "CENTER", "RIGHT", "BOTTOMLEFT", "BOTTOM", "BOTTOMRIGHT" }
+
 local BAR_TYPE_ITEMS = {
     ["stack"]  = L.mbTypeStack,
     ["charge"] = L.mbTypeCharge,
@@ -22,7 +43,21 @@ local UNIT_ITEMS = {
     ["target"] = L.mbUnitTarget,
 }
 
+local CLASS_TAG_ORDER = {
+    "ALL", "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST",
+    "DEATHKNIGHT", "SHAMAN", "MAGE", "WARLOCK", "MONK",
+    "DRUID", "DEMONHUNTER", "EVOKER",
+}
+
 local selectedBarIndex = 1
+local PLAYER_CLASS_TAG = select(2, UnitClass("player"))
+
+local function IsClassMatchedForCurrentPlayer(classTag)
+    if classTag == nil or classTag == "" or classTag == "ALL" then
+        return true
+    end
+    return classTag == PLAYER_CLASS_TAG
+end
 
 local function GetFontItems()
     local items, order = {}, {}
@@ -47,9 +82,11 @@ local function GetTextureItems()
 end
 
 local function NewBarDefaults(id, barType, spellID, spellName, unit)
+    local playerClass = select(2, UnitClass("player"))
     return {
         id         = id,
         enabled    = true,
+        class      = playerClass,
         barType    = barType or "stack",
         spellID    = spellID or 0,
         spellName  = spellName or "",
@@ -79,17 +116,34 @@ local function NewBarDefaults(id, barType, spellID, spellName, unit)
         segmentGap      = 1,
         hideFromCDM     = false,
         showCondition   = "always",
+        frameStrata     = "MEDIUM",
+        textAnchor      = "RIGHT",
         specs      = { GetSpecialization() or 1 },
     }
+end
+
+local function GetClassItems()
+    local items, order = {}, {}
+    items.ALL = L.classAll
+    order[#order + 1] = "ALL"
+    for i = 2, #CLASS_TAG_ORDER do
+        local classTag = CLASS_TAG_ORDER[i]
+        local className = (LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[classTag]) or classTag
+        items[classTag] = className
+        order[#order + 1] = classTag
+    end
+    return items, order
 end
 
 local function GetBarDropdownList(cfg)
     local items, order = {}, {}
     for i, bar in ipairs(cfg.bars) do
-        local name = bar.spellName and bar.spellName ~= "" and bar.spellName or L.mbNoSpell
-        local typeTag = bar.barType == "charge" and L.mbTypeCharge or L.mbTypeStack
-        items[i] = string.format("%s  [%s]", name, typeTag)
-        order[#order + 1] = i
+        if IsClassMatchedForCurrentPlayer(bar.class) then
+            local name = bar.spellName and bar.spellName ~= "" and bar.spellName or L.mbNoSpell
+            local typeTag = bar.barType == "charge" and L.mbTypeCharge or L.mbTypeStack
+            items[i] = string.format("%s  [%s]", name, typeTag)
+            order[#order + 1] = i
+        end
     end
     return items, order
 end
@@ -121,6 +175,18 @@ local function BuildBarConfig(container, barCfg, rebuildAll)
         rebuildAll()
     end)
     container:AddChild(typeDD)
+
+    local classItems, classOrder = GetClassItems()
+    local classDD = AceGUI:Create("Dropdown")
+    classDD:SetLabel(L.mbLoadClass)
+    classDD:SetList(classItems, classOrder)
+    classDD:SetValue(barCfg.class or "ALL")
+    classDD:SetFullWidth(true)
+    classDD:SetCallback("OnValueChanged", function(_, _, val)
+        barCfg.class = val
+        MB:RebuildAllBars()
+    end)
+    container:AddChild(classDD)
 
     local spellBox = AceGUI:Create("EditBox")
     spellBox:SetLabel(L.mbSpellID)
@@ -181,13 +247,14 @@ local function BuildBarConfig(container, barCfg, rebuildAll)
     container:AddChild(hideCDMCB)
 
     local SHOW_COND_ITEMS = {
-        ["always"]  = L.mbCondAlways,
-        ["combat"]  = L.mbCondCombat,
-        ["target"]  = L.mbCondTarget,
+        ["always"]       = L.mbCondAlways,
+        ["combat"]       = L.mbCondCombat,
+        ["target"]       = L.mbCondTarget,
+        ["dragonriding"] = L.mbCondDragonriding,
     }
     local condDD = AceGUI:Create("Dropdown")
     condDD:SetLabel(L.mbShowCondition)
-    condDD:SetList(SHOW_COND_ITEMS, { "always", "combat", "target" })
+    condDD:SetList(SHOW_COND_ITEMS, { "always", "combat", "target", "dragonriding" })
     condDD:SetValue(barCfg.showCondition or "always")
     condDD:SetFullWidth(true)
     condDD:SetCallback("OnValueChanged", function(_, _, val)
@@ -270,6 +337,17 @@ local function BuildBarConfig(container, barCfg, rebuildAll)
     styleGroup:SetLayout("Flow")
     container:AddChild(styleGroup)
 
+    local strataDD = AceGUI:Create("Dropdown")
+    strataDD:SetLabel(L.mbFrameStrata)
+    strataDD:SetList(STRATA_ITEMS, STRATA_ORDER)
+    strataDD:SetValue(barCfg.frameStrata or "MEDIUM")
+    strataDD:SetFullWidth(true)
+    strataDD:SetCallback("OnValueChanged", function(_, _, val)
+        barCfg.frameStrata = val
+        MB:RebuildAllBars()
+    end)
+    styleGroup:AddChild(strataDD)
+
     local wSlider = AceGUI:Create("Slider")
     wSlider:SetLabel(L.mbBarWidth)
     wSlider:SetSliderValues(60, 500, 1)
@@ -283,7 +361,7 @@ local function BuildBarConfig(container, barCfg, rebuildAll)
 
     local hSlider = AceGUI:Create("Slider")
     hSlider:SetLabel(L.mbBarHeight)
-    hSlider:SetSliderValues(8, 60, 1)
+    hSlider:SetSliderValues(6, 60, 1)
     hSlider:SetValue(barCfg.height)
     hSlider:SetFullWidth(true)
     hSlider:SetCallback("OnValueChanged", function(_, _, val)
@@ -434,21 +512,16 @@ local function BuildBarConfig(container, barCfg, rebuildAll)
     end)
     styleGroup:AddChild(textCB)
 
-    local TEXT_ALIGN_ITEMS = {
-        ["LEFT"]   = L.mbTextAlignLeft,
-        ["CENTER"] = L.mbTextAlignCenter,
-        ["RIGHT"]  = L.mbTextAlignRight,
-    }
-    local alignDD = AceGUI:Create("Dropdown")
-    alignDD:SetLabel(L.mbTextAlign)
-    alignDD:SetList(TEXT_ALIGN_ITEMS, { "LEFT", "CENTER", "RIGHT" })
-    alignDD:SetValue(barCfg.textAlign or "RIGHT")
-    alignDD:SetFullWidth(true)
-    alignDD:SetCallback("OnValueChanged", function(_, _, val)
-        barCfg.textAlign = val
+    local anchorDD = AceGUI:Create("Dropdown")
+    anchorDD:SetLabel(L.mbTextAnchor)
+    anchorDD:SetList(TEXT_ANCHOR_ITEMS, TEXT_ANCHOR_ORDER)
+    anchorDD:SetValue(barCfg.textAnchor or barCfg.textAlign or "RIGHT")
+    anchorDD:SetFullWidth(true)
+    anchorDD:SetCallback("OnValueChanged", function(_, _, val)
+        barCfg.textAnchor = val
         Refresh()
     end)
-    styleGroup:AddChild(alignDD)
+    styleGroup:AddChild(anchorDD)
 
     local txSlider = AceGUI:Create("Slider")
     txSlider:SetLabel(L.mbTextOffsetX)
@@ -634,7 +707,8 @@ function ns.BuildMonitorBarsTab(scroll)
     end)
     scroll:AddChild(addBtn)
 
-    if #cfg.bars == 0 then
+    local barItems, barOrder = GetBarDropdownList(cfg)
+    if #barOrder == 0 then
         local emptyLabel = AceGUI:Create("Label")
         emptyLabel:SetText("\n|cffaaaaaa" .. L.mbNoBar .. "|r")
         emptyLabel:SetFullWidth(true)
@@ -647,9 +721,15 @@ function ns.BuildMonitorBarsTab(scroll)
     heading:SetFullWidth(true)
     scroll:AddChild(heading)
 
-    local barItems, barOrder = GetBarDropdownList(cfg)
-    if selectedBarIndex > #cfg.bars then
-        selectedBarIndex = #cfg.bars
+    local selectedVisible = false
+    for _, idx in ipairs(barOrder) do
+        if idx == selectedBarIndex then
+            selectedVisible = true
+            break
+        end
+    end
+    if not selectedVisible then
+        selectedBarIndex = barOrder[1]
     end
 
     local barDD = AceGUI:Create("Dropdown")

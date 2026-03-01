@@ -82,6 +82,7 @@ local function EnsureTrackedBarsProxyFrame()
 
     f:SetScript("OnDragStart", function(self)
         if InCombatLockdown() then return end
+        self._isDragging = true
         self:StartMoving()
         self:SetScript("OnUpdate", function()
             MirrorProxyToViewer(self)
@@ -94,6 +95,25 @@ local function EnsureTrackedBarsProxyFrame()
         SaveTrackedBarsManagedPoint(p or "CENTER", x or 0, y or 0)
         SyncTrackedBarsPosToWoWLayout()
         RequestTrackedBarsRefresh()
+    end)
+    -- 点击（非拖动）时将选中事件转发给原生 viewer，
+    -- 使 WoW 编辑模式弹出其自带的设置配置面板。
+    f:SetScript("OnMouseUp", function(self, button)
+        if button == "LeftButton" then
+            local wasDragging = self._isDragging
+            self._isDragging = false
+            if not wasDragging then
+                local viewer = GetTrackedBarsViewerSafe()
+                if viewer and EditModeManagerFrame and EditModeManagerFrame.SelectSystem then
+                    EditModeManagerFrame:SelectSystem(viewer)
+                end
+            end
+        elseif button == "RightButton" then
+            local viewer = GetTrackedBarsViewerSafe()
+            if viewer and EditModeManagerFrame and EditModeManagerFrame.SelectSystem then
+                EditModeManagerFrame:SelectSystem(viewer)
+            end
+        end
     end)
 
     f:Hide()
@@ -171,47 +191,77 @@ local function SetupBuffViewerHooks()
     if not viewer or buffViewerHooksSetup then return end
     buffViewerHooksSetup = true
 
-    -- RefreshData → 战斗中每次 buff 数据更新触发
-    if viewer.RefreshData then
-        hooksecurefunc(viewer, "RefreshData", function()
-            Layout:MarkBuffCenteringDirty()
+    local function ImmediateBuffRefresh()
+        if viewer._cdf_buffRefreshing then return end
+        if not viewer.IsInitialized or not viewer:IsInitialized() then
             RequestBuffViewerRefresh()
+            return
+        end
+        if EditModeManagerFrame and EditModeManagerFrame.layoutApplyInProgress then
+            RequestBuffViewerRefresh()
+            return
+        end
+        Layout:RefreshViewer("BuffIconCooldownViewer")
+    end
+
+    -- OnAcquireItemFrame → 帧创建/获取的最早时机，立即隐藏防止闪烁
+    if viewer.OnAcquireItemFrame then
+        hooksecurefunc(viewer, "OnAcquireItemFrame", function(_, frame)
+            if frame then frame:SetAlpha(0) end
         end)
     end
 
-    -- UpdateLayout / Layout → 布局重算完成后触发
-    local function OnPostLayout()
-        Layout:MarkBuffCenteringDirty()
-        RequestBuffViewerRefresh()
-    end
-    if viewer.UpdateLayout then
-        hooksecurefunc(viewer, "UpdateLayout", OnPostLayout)
-    elseif viewer.Layout then
-        hooksecurefunc(viewer, "Layout", OnPostLayout)
+    -- RefreshData → 数据更新后同步重定位
+    if viewer.RefreshData then
+        hooksecurefunc(viewer, "RefreshData", ImmediateBuffRefresh)
     end
 
-    -- itemFramePool.Acquire → 新帧从池激活（新 buff 出现）
-    -- itemFramePool.Release → 帧归还池（buff 消失），立即重排
+    -- UpdateLayout / Layout → 布局重算后同步重定位（最关键的防闪烁钩子）
+    if viewer.UpdateLayout then
+        hooksecurefunc(viewer, "UpdateLayout", ImmediateBuffRefresh)
+    elseif viewer.Layout then
+        hooksecurefunc(viewer, "Layout", ImmediateBuffRefresh)
+    end
+
+    -- itemFramePool.Acquire → debounced 安全网
+    -- itemFramePool.Release → 立即标记居中脏 + 同步刷新（buff 消失后需立即重排）
     if viewer.itemFramePool then
         if not viewer.itemFramePool._cdf_acquireHooked then
             viewer.itemFramePool._cdf_acquireHooked = true
-            hooksecurefunc(viewer.itemFramePool, "Acquire", function()
-                RequestBuffViewerRefresh()
-            end)
+            hooksecurefunc(viewer.itemFramePool, "Acquire", RequestBuffViewerRefresh)
         end
         if not viewer.itemFramePool._cdf_releaseHooked then
             viewer.itemFramePool._cdf_releaseHooked = true
             hooksecurefunc(viewer.itemFramePool, "Release", function()
-                Layout:MarkBuffCenteringDirty()   -- 立即标脏，下帧 OnUpdate 重排
-                RequestBuffViewerRefresh()
+                Layout.MarkBuffCenteringDirty()
+                ImmediateBuffRefresh()
             end)
         end
     end
 
     -- OnShow → viewer 变为可见时刷新
-    viewer:HookScript("OnShow", function()
+    viewer:HookScript("OnShow", RequestBuffViewerRefresh)
+
+    -- SetPoint hook：系统可能在编辑模式或 RefreshLayout 中重定位 viewer
+    hooksecurefunc(viewer, "SetPoint", function()
+        if InCombatLockdown() then return end
+        if viewer._cdf_buffRefreshing then return end
         RequestBuffViewerRefresh()
     end)
+
+    -- UpdateSystemSettingIconSize → Blizzard 改变图标大小后强制 scale=1
+    if viewer.UpdateSystemSettingIconSize then
+        hooksecurefunc(viewer, "UpdateSystemSettingIconSize", function()
+            if viewer.itemFramePool then
+                for frame in viewer.itemFramePool:EnumerateActive() do
+                    if frame and frame.SetScale then
+                        frame:SetScale(1)
+                    end
+                end
+            end
+            RequestBuffViewerRefresh()
+        end)
+    end
 end
 
 local function HookTrackedBarChildren()
@@ -259,6 +309,111 @@ RequestTrackedBarsRefresh = function()
     end)
 end
 
+------------------------------------------------------
+-- 锁定 BuffIconCooldownViewer 编辑模式
+-- 阻止系统设置面板、拖拽、选择，防止系统干扰布局
+------------------------------------------------------
+local buffViewerEditModeLocked = false
+
+local function IsCooldownViewerSystemFrame(frame)
+    local cooldownSystem = Enum and Enum.EditModeSystem and Enum.EditModeSystem.CooldownViewer
+    return cooldownSystem and frame and frame.system == cooldownSystem
+end
+
+-- 同步 Selection overlay 尺寸到 viewer（确保编辑模式预览区域与 iconLimit 一致）
+local function SyncBuffViewerSelectionSize()
+    local viewer = BuffIconCooldownViewer
+    if not viewer then return end
+    local selection = viewer.Selection
+    if not selection then return end
+    if InCombatLockdown() then return end
+
+    selection:ClearAllPoints()
+    selection:SetAllPoints(viewer)
+end
+
+local function LockBuffViewerEditMode()
+    if buffViewerEditModeLocked then return end
+
+    local function TrySetup()
+        local viewer = BuffIconCooldownViewer
+        local EditModeSystemSettingsDialog = _G.EditModeSystemSettingsDialog
+        if not (viewer and EditModeSystemSettingsDialog and Enum and Enum.EditModeSystem) then
+            return false
+        end
+        if not IsCooldownViewerSystemFrame(viewer) then return false end
+
+        -- 阻止系统设置面板打开：当目标为 BuffIconCooldownViewer 时隐藏
+        hooksecurefunc(EditModeSystemSettingsDialog, "AttachToSystemFrame", function(dialog, systemFrame)
+            if systemFrame ~= viewer then return end
+            dialog:Hide()
+        end)
+
+        -- 阻止拖拽
+        viewer:SetMovable(false)
+        local selection = viewer.Selection
+        if selection then
+            selection:SetScript("OnDragStart", nil)
+            selection:SetScript("OnDragStop", nil)
+        end
+
+        -- hook SelectSystem：阻止选择并隐藏设置面板
+        hooksecurefunc(viewer, "SelectSystem", function(sf)
+            sf:SetMovable(false)
+            if EditModeSystemSettingsDialog.attachedToSystem == sf then
+                EditModeSystemSettingsDialog:Hide()
+            end
+            SyncBuffViewerSelectionSize()
+        end)
+
+        -- hook HighlightSystem：同步 selection 尺寸
+        hooksecurefunc(viewer, "HighlightSystem", function()
+            SyncBuffViewerSelectionSize()
+        end)
+
+        -- hook HighlightSystem / ClearHighlight 显示/隐藏锁定提示
+        if selection then
+            local lockText
+            local function EnsureLockText()
+                if lockText then return lockText end
+                local overlay = CreateFrame("Frame", nil, UIParent)
+                overlay:SetAllPoints(selection)
+                overlay:SetFrameStrata(selection:GetFrameStrata())
+                overlay:SetFrameLevel(selection:GetFrameLevel() + 5)
+                lockText = overlay:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+                lockText:SetPoint("CENTER", overlay, "CENTER", 0, -30)
+                lockText:SetTextColor(0.99, 0.07, 0, 1)
+                lockText:SetText(L.buffEditModeLocked or "Edit Mode locked - use /cdf")
+                lockText:Hide()
+                overlay:Show()
+                return lockText
+            end
+
+            selection:HookScript("OnMouseDown", function()
+                local t = EnsureLockText()
+                t:Show()
+                C_Timer.After(6, function()
+                    if t then t:Hide() end
+                end)
+            end)
+            selection:HookScript("OnHide", function()
+                if lockText then lockText:Hide() end
+            end)
+        end
+
+        buffViewerEditModeLocked = true
+        return true
+    end
+
+    if not TrySetup() then
+        if EventUtil and EventUtil.ContinueOnAddOnLoaded then
+            EventUtil.ContinueOnAddOnLoaded("Blizzard_EditMode", function()
+                TrySetup()
+            end)
+        end
+    end
+end
+
 local function RegisterCDMHooks()
     -- Essential / Utility：只需 hook RefreshLayout
     if EssentialCooldownViewer then
@@ -275,39 +430,42 @@ local function RegisterCDMHooks()
     -- Buff viewer：RefreshData / UpdateLayout / Pool / OnShow 综合钩子
     SetupBuffViewerHooks()
 
-    -- Buff viewer RefreshLayout → 兜底钩子（布局设置/大小变更时）
+    -- Buff viewer RefreshLayout → 同步重排（布局设置/大小变更时）
     if BuffIconCooldownViewer then
         hooksecurefunc(BuffIconCooldownViewer, "RefreshLayout", function()
-            Layout:MarkBuffCenteringDirty()
             Layout:RefreshViewer("BuffIconCooldownViewer")
         end)
     end
 
     -- Mixin 级别钩子：OnCooldownIDSet / OnActiveStateChanged
-        if CooldownViewerBuffIconItemMixin.OnCooldownIDSet then
-            hooksecurefunc(CooldownViewerBuffIconItemMixin, "OnCooldownIDSet", function(frame)
-                if not BuffIconCooldownViewer then return end
-                local parent = frame:GetParent()
-                if parent ~= BuffIconCooldownViewer and parent ~= UIParent then return end
-                -- 实时更新 spellID→cooldownID 映射并重建 suppressed 集合
-                if MB and MB.UpdateFrameMapping then
-                    MB:UpdateFrameMapping(frame)
-                end
-                Layout:ProvisionalPlaceInGroup(frame)
-                Layout:MarkBuffCenteringDirty()
-                RequestBuffViewerRefresh()
-            end)
-        end
-        if CooldownViewerBuffIconItemMixin.OnActiveStateChanged then
-            hooksecurefunc(CooldownViewerBuffIconItemMixin, "OnActiveStateChanged", function(frame)
-                if not BuffIconCooldownViewer then return end
-                local parent = frame:GetParent()
-                if parent ~= BuffIconCooldownViewer and parent ~= UIParent then return end
-                Layout:ProvisionalPlaceInGroup(frame)
-                Layout:MarkBuffCenteringDirty()
-                RequestBuffViewerRefresh()
-            end)
-        end
+    local function IsBuffViewerIcon(frame)
+        local parent = frame:GetParent()
+        return parent == BuffIconCooldownViewer or frame._cdf_buffViewer
+    end
+
+    if CooldownViewerBuffIconItemMixin.OnCooldownIDSet then
+        hooksecurefunc(CooldownViewerBuffIconItemMixin, "OnCooldownIDSet", function(frame)
+            if not BuffIconCooldownViewer then return end
+            if not IsBuffViewerIcon(frame) then return end
+            frame._cdf_buffViewer = true
+            if MB and MB.UpdateFrameMapping then
+                MB:UpdateFrameMapping(frame)
+            end
+            Layout.ProvisionalPlaceBuffFrame(frame)
+            RequestBuffViewerRefresh()
+        end)
+    end
+    if CooldownViewerBuffIconItemMixin.OnActiveStateChanged then
+        hooksecurefunc(CooldownViewerBuffIconItemMixin, "OnActiveStateChanged", function(frame)
+            if not BuffIconCooldownViewer then return end
+            if not IsBuffViewerIcon(frame) then return end
+            Layout.ProvisionalPlaceBuffFrame(frame)
+            RequestBuffViewerRefresh()
+        end)
+    end
+
+    -- 锁定 BuffIconCooldownViewer 编辑模式
+    LockBuffViewerEditMode()
 end
 
 local function RegisterTrackedBarsHooks()
@@ -370,10 +528,19 @@ local function RegisterEventRegistryCallbacks(mods)
         C_Timer.After(0.15, function() Layout:PositionGroupContainers() end)
     end)
 
+    EventRegistry:RegisterCallback("CooldownViewerSettings.OnShow", function()
+        RequestBuffViewerRefresh()
+        if mods.trackedBars then
+            RequestTrackedBarsRefresh()
+        end
+    end)
+
     EventRegistry:RegisterCallback("EditMode.Enter", function()
         CaptureViewerPointToManagedCfg()
         ShowTrackedBarsProxy()
         RequestRefreshAll(0)
+        -- 延迟同步 Selection overlay 尺寸，确保 RefreshAll 设置 viewer 尺寸后生效
+        C_Timer.After(0.1, SyncBuffViewerSelectionSize)
     end)
     EventRegistry:RegisterCallback("EditMode.Exit", function()
         HideTrackedBarsProxy()
@@ -418,9 +585,6 @@ initFrame:SetScript("OnEvent", function(_, _, addonName)
         RegisterEventRegistryCallbacks(mods)
         SetupGlowHooks()
         -- 立即初始化分组容器，确保第一次 buff 触发时 buffGroupContainers 已就绪。
-        -- GetGroupIdxForIcon 在返回分组索引前会检查 buffGroupContainers[gIdx]，
-        -- 若容器为 nil（InitBuffGroups 未调用），ProvisionalPlaceInGroup 永远返回 nil
-        -- 导致首次触发的 buff 显示在系统 buff 组而非自定义分组。
         Layout:InitBuffGroups()
     end
 
@@ -479,6 +643,16 @@ initFrame:SetScript("OnEvent", function(_, _, addonName)
     end
 
     if mods.cdmBeautify then
+        eventHandlers["LOADING_SCREEN_DISABLED"] = function()
+            RequestRefreshAll(0)
+            SetupBuffViewerHooks()
+            Layout.EnableBuffCentering()
+        end
+
+        eventHandlers["UI_SCALE_CHANGED"] = function()
+            RequestRefreshAll(0)
+        end
+
         eventHandlers["EDIT_MODE_LAYOUTS_UPDATED"] = function()
             if IsManagedTrackedBarsEnabled() and trackedBarsProxyFrame and trackedBarsProxyFrame:IsShown() then
                 local p, _, _, x, y = trackedBarsProxyFrame:GetPoint(1)
@@ -504,6 +678,7 @@ initFrame:SetScript("OnEvent", function(_, _, addonName)
                 Style:InvalidateKeybindCache()
             end
             RequestRefreshAll(0)
+            if mods.monitorBars then MB:OnSkyridingChanged() end
         end
 
         eventHandlers["ACTIONBAR_HIDEGRID"] = function()
@@ -516,7 +691,7 @@ initFrame:SetScript("OnEvent", function(_, _, addonName)
 
     if mods.monitorBars or mods.trackedBars then
         eventHandlers["UNIT_AURA"] = function(unit)
-            if mods.monitorBars then MB:OnAuraUpdate() end
+            if mods.monitorBars then MB:OnAuraUpdate(unit) end
             if unit == "player" and mods.trackedBars then
                 RequestTrackedBarsRefresh()
             end
@@ -528,24 +703,40 @@ initFrame:SetScript("OnEvent", function(_, _, addonName)
             MB:OnChargeUpdate()
         end
 
-        eventHandlers["PLAYER_REGEN_ENABLED"] = function()
-            MB:OnCombatLeave()
-        end
-
-        eventHandlers["PLAYER_REGEN_DISABLED"] = function()
-            MB:OnCombatEnter()
-        end
-
         eventHandlers["PLAYER_TARGET_CHANGED"] = function()
             MB:OnTargetChanged()
         end
+
+        -- 御龙术专用事件（与 Glider 插件相同：UPDATE_BONUS_ACTIONBAR、
+        -- ACTIONBAR_UPDATE_STATE、PLAYER_CAN_GLIDE_CHANGED、PLAYER_IS_GLIDING_CHANGED）
+        -- UPDATE_BONUS_ACTIONBAR 若 cdmBeautify 未开，需单独注册
+        if not mods.cdmBeautify then
+            eventHandlers["UPDATE_BONUS_ACTIONBAR"] = function() MB:OnSkyridingChanged() end
+        end
+        eventHandlers["ACTIONBAR_UPDATE_STATE"]    = function() MB:OnSkyridingChanged() end
+        eventHandlers["PLAYER_CAN_GLIDE_CHANGED"]  = function() MB:OnSkyridingChanged() end
+        eventHandlers["PLAYER_IS_GLIDING_CHANGED"] = function() MB:OnSkyridingChanged() end
     end
 
-    -- SPELL_UPDATE_COOLDOWN：同时服务 MonitorBars 和 ItemMonitor
-    if mods.monitorBars or (mods.itemMonitor and IM) then
+    -- PLAYER_REGEN_ENABLED/DISABLED：服务 MonitorBars + 技能可用高亮（combatOnly）
+    if mods.monitorBars or mods.cdmBeautify then
+        eventHandlers["PLAYER_REGEN_ENABLED"] = function()
+            if mods.monitorBars then MB:OnCombatLeave() end
+            if mods.cdmBeautify then RequestRefreshAll(0) end
+        end
+
+        eventHandlers["PLAYER_REGEN_DISABLED"] = function()
+            if mods.monitorBars then MB:OnCombatEnter() end
+            if mods.cdmBeautify then RequestRefreshAll(0) end
+        end
+    end
+
+    -- SPELL_UPDATE_COOLDOWN：服务 MonitorBars、ItemMonitor、技能可用高亮
+    if mods.monitorBars or (mods.itemMonitor and IM) or mods.cdmBeautify then
         eventHandlers["SPELL_UPDATE_COOLDOWN"] = function()
             if mods.monitorBars then MB:OnCooldownUpdate() end
             if mods.itemMonitor and IM then IM:UpdateAllCooldowns() end
+            if mods.cdmBeautify then RequestRefreshAll(0) end
         end
     end
 
@@ -579,6 +770,10 @@ initFrame:SetScript("OnEvent", function(_, _, addonName)
 
     if ns.InitSettings then
         ns:InitSettings()
+    end
+
+    if ns.InitMinimapButton then
+        ns:InitMinimapButton()
     end
 
     if ns.Visibility then

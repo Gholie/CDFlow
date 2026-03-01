@@ -14,10 +14,24 @@ local HasAuraInstanceID  = MB.HasAuraInstanceID
 local FindCDMFrame       = MB.FindCDMFrame
 local spellToCooldownID  = MB._spellToCooldownID
 local cooldownIDToFrame  = MB._cooldownIDToFrame
+local PLAYER_CLASS_TAG   = select(2, UnitClass("player"))
 
 local activeFrames = {}
 local elapsed = 0
 local inCombat = false
+local frameTick = 0
+
+-- 御龙术（Skyriding）检测
+-- 主判断：御龙术动作条占据 BonusBar slot 11 / offset 5
+-- 次判断：canGlide == true 说明玩家骑乘了御龙坐骑（不再要求 powerBar 非零，
+--         因为地面停止时 UnitPowerBarID 可能为 0）
+local function IsSkyriding()
+    if GetBonusBarIndex() == 11 and GetBonusBarOffset() == 5 then
+        return true
+    end
+    local _, canGlide = C_PlayerInfo.GetGlidingInfo()
+    return canGlide == true
+end
 
 ------------------------------------------------------
 -- CDM 帧 Hook 管理
@@ -165,6 +179,14 @@ local function ApplyWholeBorder(barFrame, cfg)
     border:Show()
 end
 
+-- 统一监控条层级基线，避免“BACKGROUND”仍因固定高 FrameLevel 覆盖其他 UI
+local function GetBaseFrameLevelByStrata(strata)
+    if strata == "BACKGROUND" then
+        return 0
+    end
+    return 1
+end
+
 local function CreateSegments(barFrame, count, cfg)
     barFrame._segments = barFrame._segments or {}
     barFrame._segBGs = barFrame._segBGs or {}
@@ -240,6 +262,36 @@ local function CreateSegments(barFrame, count, cfg)
 end
 
 ------------------------------------------------------
+-- 文字锚点工具
+------------------------------------------------------
+
+-- 根据锚点推导 SetJustifyH 水平对齐方向
+local function AnchorToJustifyH(anchor)
+    if anchor == "LEFT" or anchor == "TOPLEFT" or anchor == "BOTTOMLEFT" then
+        return "LEFT"
+    elseif anchor == "CENTER" or anchor == "TOP" or anchor == "BOTTOM" then
+        return "CENTER"
+    else
+        return "RIGHT"
+    end
+end
+
+-- 将用户选择的锚点拆成 point / relativePoint / defaultOffsetX：
+-- 顶部系列：文字底边对齐父帧顶边（文字在顶部）
+-- 底部系列：文字顶边对齐父帧底边（文字在底部）
+-- 其余：自对齐
+local ANCHOR_POINT = {
+    TOPLEFT     = "BOTTOMLEFT",  TOP     = "BOTTOM",  TOPRIGHT     = "BOTTOMRIGHT",
+    LEFT        = "LEFT",        CENTER  = "CENTER",  RIGHT        = "RIGHT",
+    BOTTOMLEFT  = "TOPLEFT",     BOTTOM  = "TOP",     BOTTOMRIGHT  = "TOPRIGHT",
+}
+local ANCHOR_REL = {
+    TOPLEFT     = "TOPLEFT",     TOP     = "TOP",     TOPRIGHT     = "TOPRIGHT",
+    LEFT        = "LEFT",        CENTER  = "CENTER",  RIGHT        = "RIGHT",
+    BOTTOMLEFT  = "BOTTOMLEFT",  BOTTOM  = "BOTTOM",  BOTTOMRIGHT  = "BOTTOMRIGHT",
+}
+
+------------------------------------------------------
 -- 条创建 / 样式
 ------------------------------------------------------
 
@@ -250,8 +302,10 @@ function MB:CreateBarFrame(barCfg)
     local f = CreateFrame("Frame", "CDFlowMonitorBar" .. id, UIParent, "BackdropTemplate")
     f:SetSize(barCfg.width, barCfg.height)
     f:SetPoint("CENTER", UIParent, "CENTER", barCfg.posX, barCfg.posY)
-    f:SetFrameStrata("MEDIUM")
-    f:SetFrameLevel(10)
+    local strata = barCfg.frameStrata or "MEDIUM"
+    local baseLevel = GetBaseFrameLevelByStrata(strata)
+    f:SetFrameStrata(strata)
+    f:SetFrameLevel(baseLevel)
     f:SetClampedToScreen(true)
     f._barID = id
 
@@ -271,20 +325,21 @@ function MB:CreateBarFrame(barCfg)
     f._segContainer = CreateFrame("Frame", nil, f)
     f._segContainer:SetPoint("TOPLEFT", f, "TOPLEFT", segOffset, 0)
     f._segContainer:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
+    f._segContainer:SetFrameLevel(f:GetFrameLevel() + 1)
 
     f._textHolder = CreateFrame("Frame", nil, f)
     f._textHolder:SetAllPoints(f._segContainer)
-    f._textHolder:SetFrameLevel(f:GetFrameLevel() + 20)
+    f._textHolder:SetFrameLevel(f:GetFrameLevel() + 3)
 
     f._text = f._textHolder:CreateFontString(nil, "OVERLAY")
     local fontPath = ResolveFontPath(barCfg.fontName)
     f._text:SetFont(fontPath, barCfg.fontSize or 12, barCfg.outline or "OUTLINE")
-    local align = barCfg.textAlign or "RIGHT"
+    local anchor = barCfg.textAnchor or barCfg.textAlign or "RIGHT"
     local txOff = barCfg.textOffsetX or -4
     local tyOff = barCfg.textOffsetY or 0
-    f._text:SetPoint(align, f._textHolder, align, txOff, tyOff)
+    f._text:SetPoint(ANCHOR_POINT[anchor] or anchor, f._textHolder, ANCHOR_REL[anchor] or anchor, txOff, tyOff)
     f._text:SetTextColor(1, 1, 1, 1)
-    f._text:SetJustifyH(align)
+    f._text:SetJustifyH(AnchorToJustifyH(anchor))
 
     f._posLabel = f:CreateFontString(nil, "OVERLAY")
     f._posLabel:SetFont(STANDARD_TEXT_FONT or DEFAULT_FONT, 10, "OUTLINE")
@@ -384,6 +439,7 @@ function MB:CreateBarFrame(barCfg)
     f._nilCount = 0
     f._isChargeSpell = nil
     f._shadowCooldown = nil
+    f._arcFeedFrame = 0
 
     activeFrames[id] = f
     return f
@@ -394,6 +450,28 @@ function MB:ApplyStyle(barFrame)
     if not cfg then return end
 
     barFrame:SetSize(cfg.width, cfg.height)
+
+    local strata = cfg.frameStrata or "MEDIUM"
+    local baseLevel = GetBaseFrameLevelByStrata(strata)
+    barFrame:SetFrameStrata(strata)
+    barFrame:SetFrameLevel(baseLevel)
+    if barFrame._segContainer then barFrame._segContainer:SetFrameStrata(strata) end
+    if barFrame._textHolder    then barFrame._textHolder:SetFrameStrata(strata) end
+    if barFrame._mbBorder      then barFrame._mbBorder:SetFrameStrata(strata) end
+    if barFrame._segContainer then barFrame._segContainer:SetFrameLevel(baseLevel + 1) end
+    if barFrame._textHolder    then barFrame._textHolder:SetFrameLevel(baseLevel + 3) end
+    if barFrame._segments then
+        for _, seg in ipairs(barFrame._segments) do
+            seg:SetFrameStrata(strata)
+            seg:SetFrameLevel(baseLevel + 2)
+        end
+    end
+    if barFrame._segBorders then
+        for _, border in ipairs(barFrame._segBorders) do
+            border:SetFrameStrata(strata)
+            border:SetFrameLevel(baseLevel + 4)
+        end
+    end
 
     local bgc = cfg.bgColor or { 0.1, 0.1, 0.1, 0.6 }
     barFrame.bg:SetColorTexture(bgc[1], bgc[2], bgc[3], bgc[4])
@@ -420,10 +498,10 @@ function MB:ApplyStyle(barFrame)
     local fontPath = ResolveFontPath(cfg.fontName)
     barFrame._text:SetFont(fontPath, cfg.fontSize or 12, cfg.outline or "OUTLINE")
     barFrame._text:SetShown(cfg.showText ~= false)
-    local align = cfg.textAlign or "RIGHT"
+    local anchor = cfg.textAnchor or cfg.textAlign or "RIGHT"
     barFrame._text:ClearAllPoints()
-    barFrame._text:SetPoint(align, barFrame._textHolder, align, cfg.textOffsetX or -4, cfg.textOffsetY or 0)
-    barFrame._text:SetJustifyH(align)
+    barFrame._text:SetPoint(ANCHOR_POINT[anchor] or anchor, barFrame._textHolder, ANCHOR_REL[anchor] or anchor, cfg.textOffsetX or -4, cfg.textOffsetY or 0)
+    barFrame._text:SetJustifyH(AnchorToJustifyH(anchor))
 
     if cfg.borderStyle ~= "segment" then
         ApplyWholeBorder(barFrame, cfg)
@@ -517,18 +595,34 @@ UpdateStackBar = function(barFrame)
     end
 
     local isSecret = issecretvalue and issecretvalue(stacks)
+    local rawStacks = stacks
 
     local maxStacks = cfg.maxStacks or 5
     local segs = barFrame._segments
     if segs then
         if isSecret then
-            FeedArcDetectors(barFrame, stacks, maxStacks)
-            local exact = GetExactCount(barFrame, maxStacks)
-            for j = 1, #segs do
-                segs[j]:SetValue(j <= exact and 1 or 0)
+            local lastFeed = barFrame._arcFeedFrame or 0
+            if lastFeed == frameTick then
+                stacks = barFrame._arcResolvedStacks or 0
+            elseif lastFeed > 0 then
+                stacks = GetExactCount(barFrame, maxStacks)
+            else
+                stacks = 0
             end
-            stacks = exact
+            barFrame._arcResolvedStacks = stacks
+            FeedArcDetectors(barFrame, rawStacks, maxStacks)
+            barFrame._arcFeedFrame = frameTick
+            for j = 1, #segs do
+                segs[j]:SetValue(j <= stacks and 1 or 0)
+            end
         else
+            barFrame._arcFeedFrame = 0
+            if barFrame._arcDetectors then
+                for i = 1, maxStacks do
+                    local det = barFrame._arcDetectors[i]
+                    if det then det:SetValue(0) end
+                end
+            end
             for i = 1, #segs do
                 segs[i]:SetValue(i <= stacks and 1 or 0)
             end
@@ -779,6 +873,7 @@ end
 
 local updateFrame = CreateFrame("Frame")
 updateFrame:SetScript("OnUpdate", function(_, dt)
+    frameTick = frameTick + 1
     elapsed = elapsed + dt
     if elapsed < UPDATE_INTERVAL then return end
     elapsed = 0
@@ -791,11 +886,23 @@ updateFrame:Hide()
 ------------------------------------------------------
 
 local hasTarget = false
+local isDragonriding = false
+
+local function IsClassMatchedForCurrentPlayer(classTag)
+    if classTag == nil or classTag == "" or classTag == "ALL" then
+        return true
+    end
+    return classTag == PLAYER_CLASS_TAG
+end
 
 local function ShouldBarBeVisible(barCfg)
+    if not IsClassMatchedForCurrentPlayer(barCfg.class) then
+        return false
+    end
     local cond = barCfg.showCondition or (barCfg.combatOnly and "combat") or "always"
-    if cond == "combat" then return inCombat end
-    if cond == "target" then return hasTarget end
+    if cond == "combat"       then return inCombat end
+    if cond == "target"       then return hasTarget end
+    if cond == "dragonriding" then return isDragonriding end
     return true
 end
 
@@ -815,7 +922,10 @@ function MB:RebuildCDMSuppressedSet()
     local bars = ns.db and ns.db.monitorBars and ns.db.monitorBars.bars
     if not bars then return end
     for _, barCfg in ipairs(bars) do
-        if barCfg.enabled and barCfg.hideFromCDM and barCfg.spellID > 0 then
+        if barCfg.enabled
+            and IsClassMatchedForCurrentPlayer(barCfg.class)
+            and barCfg.hideFromCDM
+            and barCfg.spellID > 0 then
             local sid = barCfg.spellID
             local cdID = spellToCooldownID[sid]
             -- 若直接 spellID 未命中，尝试 base spell 变体（天赋替换/Override 时 ID 不同）
@@ -830,17 +940,9 @@ function MB:RebuildCDMSuppressedSet()
             end
         end
     end
-    -- 通知 buff 居中循环 suppressed 集合已变更，驱动立即重排
-    ns.suppressedVersion = (ns.suppressedVersion or 0) + 1
-    if ns.Layout then
-        if ns.Layout.MarkBuffCenteringDirty then
-            ns.Layout:MarkBuffCenteringDirty()
-        end
-        -- 立即触发完整的 RefreshViewer，执行 SplitVisible 中的 alpha=0/偏移隐藏逻辑，
-        -- 而不仅仅依赖居中循环（居中循环只做位置计算，不应用 alpha 隐藏）
-        if ns.Layout.RequestBuffRefreshFromMB then
-            ns.Layout.RequestBuffRefreshFromMB()
-        end
+    -- 触发完整 RefreshViewer，重新分类并隐藏 suppressed 帧
+    if ns.Layout and ns.Layout.RequestBuffRefreshFromMB then
+        ns.Layout.RequestBuffRefreshFromMB()
     end
 end
 
@@ -879,7 +981,10 @@ function MB:InitAllBars()
     self:RebuildCDMSuppressedSet()
 
     for _, barCfg in ipairs(bars) do
-        if barCfg.enabled and barCfg.spellID > 0 and IsBarVisibleForSpec(barCfg) then
+        if barCfg.enabled
+            and barCfg.spellID > 0
+            and IsClassMatchedForCurrentPlayer(barCfg.class)
+            and IsBarVisibleForSpec(barCfg) then
             local f = self:CreateBarFrame(barCfg)
             self:ApplyStyle(f)
 
@@ -949,6 +1054,14 @@ function MB:OnCombatLeave()
         f._needsDurationRefresh = true
         f._nilCount = 0
         f._isChargeSpell = nil
+        if f._cfg and f._cfg.barType == "stack" then
+            f._arcFeedFrame = 0
+            if f._arcDetectors then
+                for _, det in pairs(f._arcDetectors) do
+                    det:SetValue(0)
+                end
+            end
+        end
         if f._cfg and f._cfg.barType == "charge" and f._cfg.spellID > 0 then
             local chargeInfo = C_Spell.GetSpellCharges(f._cfg.spellID)
             if chargeInfo and chargeInfo.maxCharges then
@@ -975,7 +1088,15 @@ function MB:OnCooldownUpdate()
     end
 end
 
-function MB:OnAuraUpdate()
+function MB:OnAuraUpdate(unit)
+end
+
+function MB:OnSkyridingChanged()
+    local prev = isDragonriding
+    isDragonriding = IsSkyriding()
+    if isDragonriding ~= prev then
+        RefreshBarVisibility()
+    end
 end
 
 function MB:OnTargetChanged()

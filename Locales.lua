@@ -29,7 +29,7 @@ local S = {
     rowAnchor       = { "行内锚点",     "Row Anchor" },
     trackedBarsGrowDir = { "生长方向", "Growth Direction" },
     iconsPerRow     = { "每行数量",     "Icons Per Row" },
-    iconsPerRowTip  = { "0 = 不限制，单行/单列显示。推荐设为 0。", "0 = unlimited, single row/column. Recommended: 0." },
+    iconsPerRowTip  = { "0 = 不限制，单行/单列显示", "0 = unlimited, single row/column" },
     iconWidth       = { "图标宽度",     "Icon Width" },
     iconHeight      = { "图标高度",     "Icon Height" },
     spacingX        = { "列间距",       "Column Spacing" },
@@ -108,6 +108,9 @@ local S = {
     posBL           = { "左下",         "Bottom Left" },
     posBR           = { "右下",         "Bottom Right" },
     posCenter       = { "居中",         "Center" },
+    posLeft         = { "左",           "Left" },
+    posRight        = { "右",           "Right" },
+    posBottom       = { "底部",         "Bottom" },
 
     -- 高亮特效
     highlight           = { "高亮特效",         "Highlight" },
@@ -119,6 +122,14 @@ local S = {
     buffGlowFilterTitle = { "过滤列表",         "Filter List" },
     buffGlowFilterAdd   = { "添加",             "Add" },
     buffGlowFilterRemove= { "移除",             "Remove" },
+    spellAvailGlow          = { "技能可用高亮",         "Spell Availability Glow" },
+    enableSpellAvailGlow    = { "开启技能可用高亮",     "Enable Spell Availability Glow" },
+    spellAvailCombatOnly    = { "仅战斗中高亮",         "Combat Only" },
+    spellAvailFilter        = { "技能 ID 监控列表",     "Spell ID Watch List" },
+    spellAvailFilterHint    = { "指定后，当这些技能冷却完毕（可用）时自动高亮其 CDM 图标；列表为空时功能不生效。\n注意：充能类技能不受支持——即使有充能可用。", "When set, highlights the CDM icon when these spells come off cooldown. Empty list = no effect.\nNote: charge-based spells are not supported — the recharge timer prevents detection even when a charge is available." },
+    spellAvailFilterTitle   = { "监控列表",             "Watch List" },
+    spellAvailFilterAdd     = { "添加",                 "Add" },
+    spellAvailFilterRemove  = { "移除",                 "Remove" },
     hlStyle         = { "特效样式",     "Glow Style" },
     hlLines         = { "线条数量",     "Lines" },
     hlFrequency     = { "动画速度",     "Speed" },
@@ -155,6 +166,7 @@ local S = {
     height          = { "高",           "H" },
 
     -- 关于面板
+    changelog       = { "更新日志",     "Changelog" },
     openSettings    = { "打开设置",     "Open Settings" },
     aboutDesc       = { "轻量级冷却管理器美化插件，专注简洁与实用。",
                         "Lightweight Cooldown Manager Beautifier, focused on simplicity." },
@@ -168,6 +180,14 @@ local S = {
     -- 重置
     resetDefaults   = { "重置为默认配置", "Reset to Defaults" },
     resetConfirm    = { "确认重置？所有配置将恢复为默认值，此操作不可撤销。", "Confirm reset? All settings will be restored to defaults. This cannot be undone." },
+
+    -- 共享配置
+    sharedProfile       = { "共享配置",         "Shared Profile" },
+    sharedProfileDesc   = { "启用后，此角色切换为「Default」共享配置文件。所有启用此选项的角色使用同一套配置，修改立即对所有人生效；导出「Default」配置分享给他人后，对方导入并勾选即可同步。",
+                            "When enabled, this character uses the 'Default' shared profile. All characters with this option enabled share the same settings. Export the 'Default' profile to share with others." },
+    sharedProfileEnable = { "使用共享配置（所有角色同步）",  "Use Shared Profile (sync all characters)" },
+    sharedProfileOn     = { "已切换到共享配置 (Default)",    "Switched to shared profile (Default)" },
+    sharedProfileOff    = { "已切换到角色专属配置: %s",       "Switched to character profile: %s" },
 
     -- 配置文件
     profiles            = { "配置文件",       "Profiles" },
@@ -214,6 +234,8 @@ local S = {
     -- 提示
     slashHelp       = { "/cdf 打开设置", "/cdf to open settings" },
     loaded          = { "已加载 - %s",      "Loaded - %s" },
+    minimapButton   = { "小地图按钮",       "Minimap Button" },
+    showMinimap     = { "显示小地图按钮",   "Show Minimap Button" },
 
     -- 监控条
     monitorBars         = { "监控条",           "Monitor Bars" },
@@ -280,9 +302,18 @@ local S = {
     mbCondAlways        = { "始终显示",         "Always" },
     mbCondCombat        = { "仅战斗中显示",     "Only in Combat" },
     mbCondTarget        = { "有目标时显示",     "When Has Target" },
+    mbCondDragonriding  = { "仅御龙术时显示",   "Only While Skyriding" },
+    mbFrameStrata       = { "层级",             "Frame Strata" },
+    mbStrataBackground  = { "背景层（置底）",   "Background (Bottom)" },
+    mbStrataLow         = { "低层",             "Low" },
+    mbStrataMedium      = { "中层（默认）",     "Medium (Default)" },
+    mbStrataHigh        = { "高层",             "High" },
+    mbTextAnchor        = { "文字锚点",         "Text Anchor" },
+    mbLoadClass         = { "载入职业",         "Load Class" },
 
     -- 增益自定义分组
     buffGroups          = { "buff分组",         "Buff Groups" },
+    classAll            = { "全部职业",         "All Classes" },
     bgAddGroup          = { "新建分组",         "Add Group" },
     bgDeleteGroup       = { "删除此组",         "Delete Group" },
     bgGroupName         = { "分组名称",         "Group Name" },
@@ -303,20 +334,35 @@ local S = {
     bgSpellPreviewOk    = { "技能名称: %s",     "Spell: %s" },
     bgSpellPreviewErr   = { "无效的技能ID",     "Invalid spell ID" },
     bgSelectGroup       = { "选择分组",         "Select Group" },
+    bgLoadClass         = { "载入职业",         "Load Class" },
     bgNoGroup           = { "无分组",           "No groups" },
     bgCatalogEmpty      = { "未找到可用 Buff，请先脱战", "No buffs found, leave combat first" },
     bgManualAdd         = { "手动输入技能ID",   "Manual Spell ID" },
     bgCDMHint           = { "提示：分组内 Buff 必须在冷却管理器中追踪才能显示；编辑模式下可预览分组位置",
                             "Note: Buffs in groups must be tracked in the Cooldown Manager; use Edit Mode to preview group positions" },
+    -- 编辑模式锁定提示
+    buffEditModeLocked  = { "Buff 组编辑模式已锁定 - 使用 /cdf 配置", "Edit Mode locked - use /cdf" },
+    cdmCombatLocked     = { "|cffff4444[CDFlow]|r 战斗中无法打开冷却管理器设置",
+                            "|cffff4444[CDFlow]|r Cannot open CDM Settings during combat" },
+    cdmEditModeLocked   = { "|cffff4444[CDFlow]|r 编辑模式下无法打开冷却管理器设置",
+                            "|cffff4444[CDFlow]|r Cannot open CDM Settings while in Edit Mode" },
+    -- buff 查看器偏移
+    buffOffsetX         = { "Buff 组 X 偏移",    "Buff Group X Offset" },
+    buffOffsetY         = { "Buff 组 Y 偏移",    "Buff Group Y Offset" },
 
     -- 物品监控
     itemMonitor         = { "物品监控",         "Item Monitor" },
     imLocked            = { "锁定位置",         "Lock Position" },
-    imAddItem           = { "添加物品",         "Add Item" },
-    imItemID            = { "物品ID",           "Item ID" },
-    imNoItems           = { "暂无监控物品",     "No items monitored" },
+    imAddItem           = { "添加条目",         "Add Entry" },
+    imEntryType         = { "类型",             "Type" },
+    imTypeItem          = { "物品",             "Item" },
+    imTypeSpell         = { "技能",             "Spell" },
+    imItemID            = { "物品/技能 ID",     "Item / Spell ID" },
+    imNoItems           = { "暂无监控条目",     "No entries monitored" },
     imItemPreviewOk     = { "物品: %s",         "Item: %s" },
+    imSpellPreviewOk    = { "技能: %s",         "Spell: %s" },
     imItemPreviewErr    = { "无效的物品ID",     "Invalid item ID" },
+    imSpellPreviewErr   = { "无效的技能ID",     "Invalid spell ID" },
     imItemLoading       = { "加载中...",         "Loading..." },
     imNudgeHint         = { "拖动或滚轮微调位置 | Shift=水平 | Ctrl=大步进",
                             "Drag or scroll to adjust | Shift=horizontal | Ctrl=10px" },
@@ -327,6 +373,54 @@ local S = {
     imWhenZero          = { "数量为0时",        "When count is 0" },
     imWhenZeroGray      = { "显示为灰色",       "Show in gray" },
     imWhenZeroHide      = { "隐藏",             "Hide" },
+
+    -- 物品监控 - 锚定配置（Group A 扩展）
+    imAnchorSection     = { "定位方式",         "Position Mode" },
+    imAnchorMode        = { "锚定模式",         "Anchor Mode" },
+    imAnchorFree        = { "自由定位",         "Free Position" },
+    imAnchorPlayerFrame = { "锚定玩家框体",     "Anchor to Player Frame" },
+    imAnchorPoint       = { "锚点位置",         "Anchor Point" },
+    imAnchorOffsetX     = { "X 偏移",           "X Offset" },
+    imAnchorOffsetY     = { "Y 偏移",           "Y Offset" },
+
+    -- 物品监控 - 预设
+    imPresetSection     = { "预设",             "Presets" },
+    imPresetRacial      = { "插入种族技能",     "Insert Racial Abilities" },
+    imPresetRacialDesc  = { "根据当前种族自动添加种族技能（已有则跳过）",
+                            "Adds racial ability spells for your current race (duplicates skipped)" },
+    imPresetPotion      = { "插入药水预设",     "Insert Potion Preset" },
+    imPresetPotionDesc  = { "添加常用药水/消耗品（已有则跳过）",
+                            "Adds common potions/consumables (duplicates skipped)" },
+    imPresetApplied     = { "预设已应用",       "Preset applied" },
+
+    -- 查看器注入组（Group B）
+    viewerInject        = { "查看器注入",       "Viewer Injections" },
+    viDesc              = { "将自定义物品/技能图标注入到重要技能或效能技能查看器的指定行/位置中",
+                            "Inject custom item/spell icons into specific rows of the Essential or Utility viewer" },
+    viAddEntry          = { "添加注入条目",     "Add Injection Entry" },
+    viEntryType         = { "类型",             "Type" },
+    viTypeItem          = { "物品",             "Item" },
+    viTypeSpell         = { "技能",             "Spell" },
+    viEntryID           = { "物品/技能 ID",     "Item / Spell ID" },
+    viViewer            = { "目标查看器",       "Target Viewer" },
+    viViewerEssential   = { "重要技能",         "Essential" },
+    viViewerUtility     = { "效能技能",         "Utility" },
+    viRow               = { "目标行",           "Row" },
+    viRow1              = { "第1行",            "Row 1" },
+    viRow2              = { "第2行",            "Row 2" },
+    viRow3              = { "第3行",            "Row 3" },
+    viPosition          = { "位置",             "Position" },
+    viPosStart          = { "行首",             "Row Start" },
+    viPosEnd            = { "行尾",             "Row End" },
+    viIconWidth         = { "图标宽度 (0=继承)", "Icon Width (0=inherit)" },
+    viIconHeight        = { "图标高度 (0=继承)", "Icon Height (0=inherit)" },
+    viEnabled           = { "启用",             "Enabled" },
+    viRemove            = { "移除",             "Remove" },
+    viNoEntries         = { "暂无注入条目",     "No injection entries" },
+    viAdd               = { "添加",             "Add" },
+    viPreviewOk         = { "%s: %s",           "%s: %s" },
+    viPreviewErr        = { "无效ID",           "Invalid ID" },
+    viPreviewLoading    = { "加载中...",         "Loading..." },
 
     -- 功能模块
     moduleManage        = { "功能模块",                                       "Modules" },

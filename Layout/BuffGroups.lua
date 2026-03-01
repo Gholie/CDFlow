@@ -12,6 +12,7 @@ local _, ns = ...
 ------------------------------------------------------
 
 local Layout = ns.Layout
+local PLAYER_CLASS_TAG = select(2, UnitClass("player"))
 
 -- 分组拼写映射：{[spellID]=groupIndex}，含 base 变体
 local _groupSpellMap = {}
@@ -23,6 +24,13 @@ local _groupSpellMapDirty = true
 
 local function RoundToPixel(v)
     return math.floor(v + 0.5)
+end
+
+local function IsClassMatchedForCurrentPlayer(classTag)
+    if classTag == nil or classTag == "" or classTag == "ALL" then
+        return true
+    end
+    return classTag == PLAYER_CLASS_TAG
 end
 
 -- 将拖动后的屏幕坐标转换为 UIParent CENTER 相对偏移
@@ -103,7 +111,7 @@ function Layout:GetBuffGroupSpellMap()
     local groups = ns.db and ns.db.buffGroups
     if groups then
         for i, group in ipairs(groups) do
-            if group.spellIDs then
+            if IsClassMatchedForCurrentPlayer(group.class) and group.spellIDs then
                 for spellID in pairs(group.spellIDs) do
                     _groupSpellMap[spellID] = i
                     -- 同时注册 base spell 变体（不覆盖已有精确配置）
@@ -152,66 +160,9 @@ function Layout:GetGroupIdxForIcon(icon)
     return nil
 end
 
--- 临时放置：立即对分组内全部图标做正确排列 + 应用样式，无需等待全量刷新。
-function Layout:ProvisionalPlaceInGroup(frame)
-    if not frame then return end
-    local gIdx = self:GetGroupIdxForIcon(frame)
-    if not gIdx then return end
-    local container = self.buffGroupContainers[gIdx]
-    if not container or not container:IsShown() then return end
-
-    local db = ns.db
-    local cfg = db and db.buffs
-    if not cfg then return end
-
-    -- 收集分组内已可见的其他图标；触发帧始终加入（可能尚未 IsShown）
-    -- 优先 itemFramePool：re-parent 后的帧已不在 GetChildren 中，需通过 pool 枚举
-    local viewer = _G["BuffIconCooldownViewer"]
-    local groupIcons = {}
-
-    if viewer then
-        if viewer.itemFramePool then
-            for child in viewer.itemFramePool:EnumerateActive() do
-                if child and child.Icon and child ~= frame and child:IsShown()
-                    and self:GetGroupIdxForIcon(child) == gIdx then
-                    groupIcons[#groupIcons + 1] = child
-                end
-            end
-        else
-            for _, child in ipairs({ viewer:GetChildren() }) do
-                if child and child.Icon and child ~= frame and child:IsShown()
-                    and self:GetGroupIdxForIcon(child) == gIdx then
-                    groupIcons[#groupIcons + 1] = child
-                end
-            end
-        end
-    end
-    -- 始终将触发帧加入（可能尚未 IsShown，所以不在上面的循环中）
-    groupIcons[#groupIcons + 1] = frame
-
-    -- 按 layoutIndex 排序，与 CollectAllIcons → RefreshBuffViewer 路径保持一致，
-    -- 避免 GetChildren() 的非确定顺序与全量刷新顺序不同导致图标互换位置
-    table.sort(groupIcons, function(a, b)
-        return (a.layoutIndex or 0) < (b.layoutIndex or 0)
-    end)
-
-    -- 立即应用样式（尺寸、缩放、边框等），避免首帧出现原始 WoW 样式
-    local Style = ns.Style
-    if Style then
-        local w, h = cfg.iconWidth, cfg.iconHeight
-        for _, icon in ipairs(groupIcons) do
-            icon._cdf_viewerKey = "buffs"
-            Style:ApplyIcon(icon, w, h, db.iconZoom, db.borderSize)
-            Style:ApplyStack(icon, cfg.stack)
-            Style:ApplyKeybind(icon, cfg)
-            Style:ApplyCooldownText(icon, cfg)
-            Style:ApplySwipeOverlay(icon)
-        end
-    end
-
-    -- 立即对组内全部图标做正确的多图标排列
-    self:RefreshBuffGroups({ [gIdx] = groupIcons }, cfg.iconWidth, cfg.iconHeight, cfg)
-end
+-- 不再需要独立的 ProvisionalPlaceInGroup。
+-- 所有分组图标定位由 RefreshBuffViewer 的统一路径处理：
+-- 收集 → 分类 → RefreshBuffGroups。
 
 ------------------------------------------------------
 -- 容器管理
@@ -361,26 +312,31 @@ end
 -- 初始化/同步所有分组容器（配置变化时调用）
 function Layout:InitBuffGroups()
     local groups = ns.db and ns.db.buffGroups or {}
+    local activeByIndex = {}
 
-    -- 销毁多余容器
-    for i = #groups + 1, #self.buffGroupContainers do
-        local c = self.buffGroupContainers[i]
-        if c then
-            c:Hide()
-            c:SetScript("OnDragStart", nil)
-            c:SetScript("OnDragStop", nil)
-            c:SetScript("OnMouseWheel", nil)
+    -- 仅为当前职业的分组创建/更新容器
+    for i, group in ipairs(groups) do
+        if IsClassMatchedForCurrentPlayer(group.class) then
+            activeByIndex[i] = true
+            if not self.buffGroupContainers[i] then
+                self.buffGroupContainers[i] = CreateGroupContainer(i, group)
+            else
+                -- 同步锁定状态（位置已由 DB 保存，不在此重置）
+                UpdateContainerLock(self.buffGroupContainers[i], group)
+            end
         end
-        self.buffGroupContainers[i] = nil
     end
 
-    -- 创建或更新容器
-    for i, group in ipairs(groups) do
-        if not self.buffGroupContainers[i] then
-            self.buffGroupContainers[i] = CreateGroupContainer(i, group)
-        else
-            -- 同步锁定状态（位置已由 DB 保存，不在此重置）
-            UpdateContainerLock(self.buffGroupContainers[i], group)
+    -- 清理非当前职业或已删除分组的容器
+    for i, container in pairs(self.buffGroupContainers) do
+        if not activeByIndex[i] then
+            if container then
+                container:Hide()
+                container:SetScript("OnDragStart", nil)
+                container:SetScript("OnDragStop", nil)
+                container:SetScript("OnMouseWheel", nil)
+            end
+            self.buffGroupContainers[i] = nil
         end
     end
 
@@ -416,28 +372,7 @@ end
 
 -- 当特定分组被添加/删除时重建
 function Layout:RebuildBuffGroup(idx)
-    local groups = ns.db and ns.db.buffGroups or {}
-    if idx > #groups then
-        -- 删除：销毁容器
-        local c = self.buffGroupContainers[idx]
-        if c then
-            c:Hide()
-            c:SetScript("OnDragStart", nil)
-            c:SetScript("OnDragStop", nil)
-            c:SetScript("OnMouseWheel", nil)
-            self.buffGroupContainers[idx] = nil
-        end
-        -- 收缩列表
-        for i = idx, #self.buffGroupContainers do
-            self.buffGroupContainers[i] = self.buffGroupContainers[i + 1]
-        end
-    else
-        -- 新增：创建容器
-        if not self.buffGroupContainers[idx] then
-            self.buffGroupContainers[idx] = CreateGroupContainer(idx, groups[idx])
-        end
-    end
-    self:MarkBuffGroupsDirty()
+    self:InitBuffGroups()
 end
 
 ------------------------------------------------------
@@ -463,8 +398,6 @@ function Layout:RefreshBuffGroups(groupBuckets, w, h, cfg)
                 local startX = -(totalW / 2) + w / 2
                 container:SetSize(totalW, h)
                 for i, icon in ipairs(icons) do
-                    -- re-parent 到 UIParent，防止 viewer RefreshLayout 干扰分组图标
-                    icon:SetParent(UIParent)
                     icon:ClearAllPoints()
                     icon:SetPoint("CENTER", container, "CENTER",
                         startX + (i - 1) * (w + spacingX), 0)
@@ -475,8 +408,6 @@ function Layout:RefreshBuffGroups(groupBuckets, w, h, cfg)
                 local startY = (totalH / 2) - h / 2
                 container:SetSize(w, totalH)
                 for i, icon in ipairs(icons) do
-                    -- re-parent 到 UIParent，防止 viewer RefreshLayout 干扰分组图标
-                    icon:SetParent(UIParent)
                     icon:ClearAllPoints()
                     icon:SetPoint("CENTER", container, "CENTER",
                         0, startY - (i - 1) * (h + spacingY))

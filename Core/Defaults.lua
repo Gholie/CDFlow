@@ -92,7 +92,7 @@ ns.defaults = {
         enabled     = true,
         growDir     = "TOP",
         rowAnchor   = "CENTER",
-        iconsPerRow = 6,
+        iconsPerRow = 5,
         iconWidth   = 30,
         iconHeight  = 30,
         spacingX    = 2,
@@ -143,6 +143,8 @@ ns.defaults = {
         iconHeight = 40,
         spacingX   = 2,
         spacingY   = 2,
+        buffOffsetX = 0,
+        buffOffsetY = 0,
         stack = {
             enabled  = false,
             fontSize = 12,
@@ -200,6 +202,18 @@ ns.defaults = {
         spellFilter = {},
     },
 
+    -- 技能可用高亮（冷却完毕时高亮）
+    spellHighlight = {
+        enabled     = false,
+        combatOnly  = false,
+        style       = "PIXEL",
+        lines       = 8,
+        frequency   = 0.2,
+        thickness   = 2,
+        scale       = 1,
+        spellFilter = {},  -- [spellID] = true，为空时不生效
+    },
+
     -- 监控条
     monitorBars = {
         locked = false,
@@ -224,7 +238,7 @@ ns.defaults = {
         iconHeight  = 40,
         spacingX    = 2,
         spacingY    = 2,
-        items       = {},   -- array of itemID (number)
+        items       = {},   -- array of { type="item"|"spell", id=N }；向后兼容裸 number
         itemCount = {
             enabled   = true,
             fontSize   = 12,
@@ -233,15 +247,16 @@ ns.defaults = {
             offsetY    = 2,
         },
         keybind = {
-            enabled     = false,
-            fontSize    = 10,
-            fontName    = "默认",
-            outline     = "OUTLINE",
-            textColor   = { 1, 1, 1, 1 },
-            point       = "TOPRIGHT",
-            offsetX     = 0,
-            offsetY     = -2,
-            manualByItem = {},
+            enabled      = false,
+            fontSize     = 10,
+            fontName     = "默认",
+            outline      = "OUTLINE",
+            textColor    = { 1, 1, 1, 1 },
+            point        = "TOPRIGHT",
+            offsetX      = 0,
+            offsetY      = -2,
+            manualByItem  = {},
+            manualBySpell = {},
         },
         cooldownText = {
             enabled   = false,
@@ -253,6 +268,11 @@ ns.defaults = {
             offsetX   = 0,
             offsetY   = 0,
         },
+    },
+
+    -- 小地图按钮
+    minimap = {
+        hide = false,
     },
 
     -- 显示规则

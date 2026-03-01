@@ -1,4 +1,4 @@
--- 物品监控模块：追踪饰品/药水等物品冷却，显示为可拖拽图标容器
+-- 物品监控模块（Group A）：追踪物品/技能冷却，显示为可拖拽图标容器
 local _, ns = ...
 
 local IM = {}
@@ -11,11 +11,12 @@ local Style = ns.Style
 ------------------------------------------------------
 
 local container   = nil   -- 可拖拽容器帧（UIParent 子帧）
-local iconFrames  = {}    -- itemID (number) → frame
-local itemOrder   = {}    -- 有序 itemID 列表（用于布局）
+local iconFrames  = {}    -- entryKey → frame（entryKey = type..":"..id）
+local itemOrder   = {}    -- 有序 entry 列表（{type, id}）
 
--- 物品名称/图标缓存（async 加载后填充）
-local itemDataCache = {}  -- itemID → { name, icon }
+-- 名称/图标缓存
+local itemDataCache  = {}  -- itemID → { name, icon }
+local spellDataCache = {}  -- spellID → { name, icon }
 
 ------------------------------------------------------
 -- 工具函数
@@ -34,25 +35,57 @@ local function IsLocked()
     return cfg and cfg.locked or false
 end
 
+-- 将 cfg.items 元素规范化为 { type, id }，兼容旧格式裸 number
+local function NormalizeEntry(e)
+    if type(e) == "number" then
+        return { type = "item", id = e }
+    end
+    return e
+end
+
+local function EntryKey(entry)
+    return (entry.type or "item") .. ":" .. tostring(entry.id)
+end
+
 ------------------------------------------------------
--- 物品数据（名称 + 图标）
+-- 数据获取（名称 + 图标）
 ------------------------------------------------------
 
--- 尝试从缓存或 C_Item API 获取物品信息；如果数据未加载则发起异步请求
 local function GetItemData(itemID)
     if itemDataCache[itemID] then return itemDataCache[itemID] end
-
     local name = C_Item.GetItemNameByID(itemID)
     local icon = C_Item.GetItemIconByID(itemID)
-
     if name then
         itemDataCache[itemID] = { name = name, icon = icon }
         return itemDataCache[itemID]
     end
-
-    -- 异步加载，GET_ITEM_INFO_RECEIVED 触发后调用 RefreshItemNames
     C_Item.RequestLoadItemDataByID(itemID)
     return nil
+end
+
+local function GetSpellData(spellID)
+    if spellDataCache[spellID] then return spellDataCache[spellID] end
+    local name = C_Spell.GetSpellName(spellID)
+    local icon = C_Spell.GetSpellTexture(spellID)
+    if name then
+        spellDataCache[spellID] = { name = name, icon = icon }
+        return spellDataCache[spellID]
+    end
+    return nil
+end
+
+-- 返回条目的显示名称和图标（UI 列表用）
+function IM.GetEntryDisplay(entry)
+    entry = NormalizeEntry(entry)
+    if entry.type == "spell" then
+        local d = GetSpellData(entry.id)
+        return d and d.name or ("Spell:" .. entry.id),
+               d and d.icon or "Interface\\Icons\\INV_Misc_QuestionMark"
+    else
+        local d = GetItemData(entry.id)
+        return d and d.name or ("Item:" .. entry.id),
+               d and d.icon or "Interface\\Icons\\INV_Misc_QuestionMark"
+    end
 end
 
 ------------------------------------------------------
@@ -60,28 +93,86 @@ end
 ------------------------------------------------------
 
 local function UpdateItemCooldown(frame)
-    if not frame or not frame.itemID then return end
-    local itemID = frame.itemID
+    if not frame or not frame._im_entry then return end
+    local entry = frame._im_entry
 
-    -- 主路径：背包物品冷却
-    local start, duration, enable = C_Container.GetItemCooldown(itemID)
-
-    -- Fallback：装备槽（饰品槽 13/14）
-    if not (start and duration and duration > 1.5) then
-        for _, slotID in ipairs({ 13, 14 }) do
-            local equippedID = GetInventoryItemID("player", slotID)
-            if equippedID and equippedID == itemID then
-                start, duration, enable = GetInventoryItemCooldown("player", slotID)
-                break
+    if entry.type == "spell" then
+        local durObj = C_Spell.GetSpellCooldownDuration and
+                       C_Spell.GetSpellCooldownDuration(entry.id)
+        if durObj and frame.Cooldown.SetCooldownFromDurationObject then
+            frame.Cooldown:SetCooldownFromDurationObject(durObj)
+        else
+            local spellCD = C_Spell.GetSpellCooldown and C_Spell.GetSpellCooldown(entry.id)
+            if spellCD and spellCD.startTime and spellCD.duration and spellCD.duration > 1.5 then
+                frame.Cooldown:SetCooldown(spellCD.startTime, spellCD.duration)
+            else
+                frame.Cooldown:Clear()
             end
         end
-    end
-
-    if start and duration and duration > 1.5 then
-        frame.Cooldown:SetCooldown(start, duration)
     else
-        frame.Cooldown:Clear()
+        local start, duration = C_Container.GetItemCooldown(entry.id)
+
+        if not (start and duration and duration > 1.5) then
+            for _, slotID in ipairs({ 13, 14 }) do
+                local equippedID = GetInventoryItemID("player", slotID)
+                if equippedID and equippedID == entry.id then
+                    start, duration = GetInventoryItemCooldown("player", slotID)
+                    break
+                end
+            end
+        end
+
+        if start and duration and duration > 1.5 then
+            frame.Cooldown:SetCooldown(start, duration)
+        else
+            frame.Cooldown:Clear()
+        end
     end
+end
+
+------------------------------------------------------
+-- 容器定位
+--
+-- posX 的含义随 rowAnchor 变化：
+--   LEFT   → 容器左边缘 到 UIParent 中心的距离
+--   RIGHT  → 容器右边缘 到 UIParent 中心的距离
+--   CENTER → 容器中心   到 UIParent 中心的距离（原有行为）
+------------------------------------------------------
+
+local function PositionContainer()
+    if not container then return end
+    local cfg = GetCfg()
+    if not cfg then return end
+
+    container:ClearAllPoints()
+    local ra = cfg.rowAnchor or "CENTER"
+    if ra == "LEFT" then
+        container:SetPoint("LEFT",   UIParent, "CENTER", cfg.posX or 0, cfg.posY or -340)
+    elseif ra == "RIGHT" then
+        container:SetPoint("RIGHT",  UIParent, "CENTER", cfg.posX or 0, cfg.posY or -340)
+    else
+        container:SetPoint("CENTER", UIParent, "CENTER", cfg.posX or 0, cfg.posY or -340)
+    end
+end
+
+-- 从当前容器位置读取对应 anchor 边的坐标
+local function ReadContainerEdgePos()
+    if not container then return 0, 0 end
+    local scx, scy = UIParent:GetCenter()
+    local cfg = GetCfg()
+    local ra = cfg and cfg.rowAnchor or "CENTER"
+    local px, py
+    if ra == "LEFT" then
+        px = RoundToPixel((container:GetLeft() or 0) - scx)
+    elseif ra == "RIGHT" then
+        px = RoundToPixel((container:GetRight() or 0) - scx)
+    else
+        local cx = (container:GetLeft() or 0) + (container:GetWidth() or 0) / 2
+        px = RoundToPixel(cx - scx)
+    end
+    local cy = (container:GetBottom() or 0) + (container:GetHeight() or 0) / 2
+    py = RoundToPixel(cy - scy)
+    return px, py
 end
 
 ------------------------------------------------------
@@ -106,11 +197,11 @@ local function LayoutIcons()
 
     if iconsPerRow <= 0 then iconsPerRow = #itemOrder end
 
-    -- 分行（仅排布当前显示的图标；数量为 0 且选择隐藏时该帧不参与布局）
     local rows = {}
     local visibleCount = 0
-    for i, itemID in ipairs(itemOrder) do
-        local frame = iconFrames[itemID]
+    for _, entry in ipairs(itemOrder) do
+        local key   = EntryKey(entry)
+        local frame = iconFrames[key]
         if frame and frame:IsShown() then
             visibleCount = visibleCount + 1
             local ri = math.floor((visibleCount - 1) / iconsPerRow) + 1
@@ -125,7 +216,6 @@ local function LayoutIcons()
         return
     end
 
-    -- 计算容器尺寸
     local maxCols = 0
     for _, row in ipairs(rows) do
         if #row > maxCols then maxCols = #row end
@@ -134,8 +224,8 @@ local function LayoutIcons()
     local containerH = numRows * h + (numRows - 1) * spacingY
     container:SetSize(math.max(containerW, w), math.max(containerH, h))
 
-    -- growDir 决定行起始方向：TOP = 从上往下，BOTTOM = 从下往上
-    local rowDirMult = (growDir == "BOTTOM") and 1 or -1  -- BOTTOM 向上增长
+    -- growDir 决定行增长方向
+    local rowDirMult = (growDir == "BOTTOM") and 1 or -1
     local firstRowY  = (growDir == "BOTTOM") and (containerH / 2 - h / 2)
                                                or -(containerH / 2 - h / 2)
 
@@ -143,13 +233,13 @@ local function LayoutIcons()
         local rowCount = #row
         local rowW = rowCount * w + (rowCount - 1) * spacingX
 
-        -- 行内锚点偏移
+        -- 行内锚点：LEFT/RIGHT 从对应边开始，CENTER 居中
         local startX
         if rowAnchor == "LEFT" then
             startX = -containerW / 2 + w / 2
         elseif rowAnchor == "RIGHT" then
             startX = containerW / 2 - rowW + w / 2
-        else -- CENTER
+        else
             startX = -rowW / 2 + w / 2
         end
 
@@ -162,15 +252,6 @@ local function LayoutIcons()
             frame:Show()
         end
     end
-
-    -- 隐藏不再使用的帧（不应发生，但做防护）
-    for itemID, frame in pairs(iconFrames) do
-        local found = false
-        for _, id in ipairs(itemOrder) do
-            if id == itemID then found = true; break end
-        end
-        if not found then frame:Hide() end
-    end
 end
 
 ------------------------------------------------------
@@ -181,14 +262,20 @@ local DEFAULT_FONT = ns._styleConst and ns._styleConst.DEFAULT_FONT or (STANDARD
 local ResolveFontPath = ns.ResolveFontPath or function() return DEFAULT_FONT end
 
 local function UpdateItemCount(frame)
-    if not frame or not frame.itemID then return end
-    local cfg = GetCfg()
-    local count = 0
-    if C_Item and C_Item.GetItemCount then
-        count = C_Item.GetItemCount(frame.itemID) or 0
+    if not frame or not frame._im_entry then return end
+    local cfg   = GetCfg()
+    local entry = frame._im_entry
+
+    -- 技能条目不显示数量
+    if entry.type == "spell" then
+        if frame._cdf_itemCount then frame._cdf_itemCount:Hide() end
+        frame:Show()
+        if frame.Icon then frame.Icon:SetVertexColor(1, 1, 1, 1) end
+        return
     end
 
-    -- 无 itemCount 配置时：始终显示图标、不显示数量文字
+    local count = C_Item and C_Item.GetItemCount and C_Item.GetItemCount(entry.id) or 0
+
     if not cfg or not cfg.itemCount then
         if frame._cdf_itemCount then frame._cdf_itemCount:Hide() end
         frame:Show()
@@ -196,10 +283,9 @@ local function UpdateItemCount(frame)
         return
     end
 
-    local ic = cfg.itemCount
+    local ic       = cfg.itemCount
     local whenZero = ic.whenZero or "gray"
 
-    -- 数量为 0 时：整颗图标变灰或整颗图标隐藏（与是否启用数量文字无关，均生效）
     if count == 0 and whenZero == "hide" then
         if frame._cdf_itemCount then frame._cdf_itemCount:Hide() end
         frame:Hide()
@@ -215,7 +301,6 @@ local function UpdateItemCount(frame)
         end
     end
 
-    -- 数量文字：仅当启用且数量不为 1 时显示（数量为 1 固定不显示）
     if not frame._cdf_itemCount then
         local fs = frame:CreateFontString(nil, "OVERLAY", "NumberFontNormalSmall")
         fs:SetShadowColor(0, 0, 0, 1)
@@ -249,21 +334,14 @@ local function ApplyStyleToFrame(frame)
     local cfg = GetCfg()
     if not cfg then return end
 
-    -- icon 尺寸/裁剪/边框（复用 Style:ApplyIcon，帧结构兼容）
     if Style and Style.ApplyIcon then
         Style:ApplyIcon(frame, cfg.iconWidth, cfg.iconHeight,
             ns.db.iconZoom or 0.08, ns.db.borderSize or 1)
     end
-
-    -- 物品数量
     UpdateItemCount(frame)
-
-    -- 冷却读秒文字（复用 Style:ApplyCooldownText）
     if Style and Style.ApplyCooldownText then
         Style:ApplyCooldownText(frame, cfg)
     end
-
-    -- 键位显示（复用 Style:ApplyKeybind，支持 button.itemID 与 itemMonitor.keybind）
     if Style and Style.ApplyKeybind then
         Style:ApplyKeybind(frame, cfg)
     end
@@ -273,34 +351,34 @@ end
 -- 图标帧管理
 ------------------------------------------------------
 
-local function CreateIconFrame(itemID)
+local function CreateIconFrame(entry)
+    local cfg = GetCfg()
+    local w   = cfg and cfg.iconWidth  or 40
+    local h   = cfg and cfg.iconHeight or 40
+
     local frame = CreateFrame("Frame", nil, container)
-    local cfg   = GetCfg()
-    local w     = cfg and cfg.iconWidth  or 40
-    local h     = cfg and cfg.iconHeight or 40
     frame:SetSize(w, h)
 
-    -- Icon 贴图（与 CDM 帧兼容）
     local icon = frame:CreateTexture(nil, "ARTWORK")
     icon:SetAllPoints(frame)
     frame.Icon = icon
 
-    -- Cooldown 帧（CooldownFrameTemplate 提供冷却读秒 + 遮罩）
     local cooldown = CreateFrame("Cooldown", nil, frame, "CooldownFrameTemplate")
     cooldown:SetAllPoints(frame)
     cooldown:SetDrawEdge(false)
     cooldown:SetDrawBling(false)
     frame.Cooldown = cooldown
 
-    frame.itemID = itemID
+    frame._im_entry = entry
+    frame.itemID = (entry.type == "item") and entry.id or nil
     frame:Hide()
 
-    -- 更新图标贴图
-    local data = GetItemData(itemID)
-    if data and data.icon then
-        icon:SetTexture(data.icon)
+    if entry.type == "spell" then
+        local d = GetSpellData(entry.id)
+        icon:SetTexture(d and d.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
     else
-        icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+        local d = GetItemData(entry.id)
+        icon:SetTexture(d and d.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
     end
 
     return frame
@@ -310,31 +388,34 @@ local function RebuildIconFrames()
     local cfg = GetCfg()
     if not cfg then return end
 
-    -- 释放不再监控的帧
-    local newSet = {}
-    for _, itemID in ipairs(cfg.items) do
-        newSet[itemID] = true
+    local newKeys = {}
+    local normalizedItems = {}
+    for _, raw in ipairs(cfg.items) do
+        local entry = NormalizeEntry(raw)
+        local key   = EntryKey(entry)
+        newKeys[key] = entry
+        normalizedItems[#normalizedItems + 1] = entry
     end
-    for itemID, frame in pairs(iconFrames) do
-        if not newSet[itemID] then
+
+    for key, frame in pairs(iconFrames) do
+        if not newKeys[key] then
             frame:Hide()
             frame:SetParent(nil)
-            iconFrames[itemID] = nil
+            iconFrames[key] = nil
         end
     end
 
-    -- 创建新帧
     itemOrder = {}
-    for _, itemID in ipairs(cfg.items) do
-        itemOrder[#itemOrder + 1] = itemID
-        if not iconFrames[itemID] then
-            iconFrames[itemID] = CreateIconFrame(itemID)
+    for _, entry in ipairs(normalizedItems) do
+        local key = EntryKey(entry)
+        itemOrder[#itemOrder + 1] = entry
+        if not iconFrames[key] then
+            iconFrames[key] = CreateIconFrame(entry)
         end
     end
 
-    -- 应用样式
-    for _, itemID in ipairs(itemOrder) do
-        ApplyStyleToFrame(iconFrames[itemID])
+    for _, entry in ipairs(itemOrder) do
+        ApplyStyleToFrame(iconFrames[EntryKey(entry)])
     end
 end
 
@@ -350,7 +431,6 @@ local function SetupContainerDrag()
     container:RegisterForDrag("LeftButton")
     container:EnableMouseWheel(true)
 
-    -- 坐标显示标签
     if not container._imPosLabel then
         local lbl = container:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         lbl:SetPoint("TOP", container, "BOTTOM", 0, -4)
@@ -359,7 +439,6 @@ local function SetupContainerDrag()
         container._imPosLabel = lbl
     end
 
-    -- 提示文字
     if not container._imHintText then
         local txt = container:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         txt:SetPoint("BOTTOM", container, "TOP", 0, 6)
@@ -374,14 +453,9 @@ local function SetupContainerDrag()
         if IsLocked() then return end
         self:StartMoving()
         self:SetScript("OnUpdate", function(s)
-            local cx, cy = s:GetCenter()
-            local sx, sy = UIParent:GetCenter()
-            if cx and cy and sx and sy then
-                local px = RoundToPixel(cx - sx)
-                local py = RoundToPixel(cy - sy)
-                if s._imPosLabel then
-                    s._imPosLabel:SetFormattedText("X: %.0f  Y: %.0f", px, py)
-                end
+            local px, py = ReadContainerEdgePos()
+            if s._imPosLabel then
+                s._imPosLabel:SetFormattedText("X: %.0f  Y: %.0f", px, py)
             end
         end)
     end)
@@ -391,16 +465,13 @@ local function SetupContainerDrag()
         self:SetScript("OnUpdate", nil)
         local cfg = GetCfg()
         if not cfg then return end
-        local cx, cy = self:GetCenter()
-        local sx, sy = UIParent:GetCenter()
-        if cx and sx then
-            cfg.posX = RoundToPixel(cx - sx)
-            cfg.posY = RoundToPixel(cy - sy)
-        end
-        self:ClearAllPoints()
-        self:SetPoint("CENTER", UIParent, "CENTER", cfg.posX, cfg.posY)
+        local px, py = ReadContainerEdgePos()
+        cfg.posX = px
+        cfg.posY = py
+        -- 重新锚定到保存的边，避免浮动锚点残留
+        PositionContainer()
         if self._imPosLabel then
-            self._imPosLabel:SetFormattedText("X: %.0f  Y: %.0f", cfg.posX, cfg.posY)
+            self._imPosLabel:SetFormattedText("X: %.0f  Y: %.0f", px, py)
         end
     end)
 
@@ -415,8 +486,7 @@ local function SetupContainerDrag()
         else
             cfg.posY = (cfg.posY or 0) + delta * step
         end
-        self:ClearAllPoints()
-        self:SetPoint("CENTER", UIParent, "CENTER", cfg.posX, cfg.posY)
+        PositionContainer()
         if self._imPosLabel then
             self._imPosLabel:SetFormattedText("X: %.0f  Y: %.0f", cfg.posX, cfg.posY)
         end
@@ -424,8 +494,8 @@ local function SetupContainerDrag()
 
     container:SetScript("OnEnter", function(self)
         if not IsLocked() then
-            if self._imHintText  then self._imHintText:Show() end
-            if self._imPosLabel  then
+            if self._imHintText then self._imHintText:Show() end
+            if self._imPosLabel then
                 local cfg = GetCfg()
                 if cfg then
                     self._imPosLabel:SetFormattedText("X: %.0f  Y: %.0f",
@@ -453,12 +523,10 @@ end
 -- 公开接口
 ------------------------------------------------------
 
--- 初始化/重建：创建容器 + 图标帧 + 布局 + 样式
 function IM:Init()
     local cfg = GetCfg()
     if not cfg then return end
 
-    -- 创建容器帧
     if not container then
         container = CreateFrame("Frame", "CDFlow_ItemMonitorContainer", UIParent)
         container:SetFrameStrata("MEDIUM")
@@ -466,49 +534,80 @@ function IM:Init()
         SetupContainerDrag()
     end
 
-    -- 定位
-    container:ClearAllPoints()
-    container:SetPoint("CENTER", UIParent, "CENTER", cfg.posX or 0, cfg.posY or -340)
-
+    PositionContainer()
     ApplyLockToContainer()
     RebuildIconFrames()
     LayoutIcons()
     self:UpdateAllCooldowns()
 end
 
--- 刷新所有物品冷却
 function IM:UpdateAllCooldowns()
-    for _, itemID in ipairs(itemOrder) do
-        local frame = iconFrames[itemID]
+    for _, entry in ipairs(itemOrder) do
+        local frame = iconFrames[EntryKey(entry)]
         if frame then UpdateItemCooldown(frame) end
     end
 end
 
--- 更新锁定状态
 function IM:SetLocked(locked)
     local cfg = GetCfg()
     if cfg then cfg.locked = locked end
     ApplyLockToContainer()
 end
 
--- 添加物品（UI 调用后需调用 Init）
-function IM:AddItem(itemID)
+-- 切换行内锚点：转换 posX 到新锚点坐标系，保持容器视觉位置不变
+function IM:SetRowAnchor(newAnchor)
     local cfg = GetCfg()
     if not cfg then return end
-    -- 去重
-    for _, id in ipairs(cfg.items) do
-        if id == itemID then return end
+
+    local old = cfg.rowAnchor or "CENTER"
+    if old == newAnchor then return end
+
+    -- 转换 posX：当前边 → 新边
+    if container then
+        local w = container:GetWidth() or 0
+        local hw = w / 2
+        if old == "CENTER" and newAnchor == "LEFT" then
+            cfg.posX = (cfg.posX or 0) - hw
+        elseif old == "CENTER" and newAnchor == "RIGHT" then
+            cfg.posX = (cfg.posX or 0) + hw
+        elseif old == "LEFT" and newAnchor == "CENTER" then
+            cfg.posX = (cfg.posX or 0) + hw
+        elseif old == "LEFT" and newAnchor == "RIGHT" then
+            cfg.posX = (cfg.posX or 0) + w
+        elseif old == "RIGHT" and newAnchor == "CENTER" then
+            cfg.posX = (cfg.posX or 0) - hw
+        elseif old == "RIGHT" and newAnchor == "LEFT" then
+            cfg.posX = (cfg.posX or 0) - w
+        end
     end
-    cfg.items[#cfg.items + 1] = itemID
+
+    cfg.rowAnchor = newAnchor
+    PositionContainer()
+    LayoutIcons()
+end
+
+-- 添加条目（entry = { type="item"|"spell", id=N } 或裸 number）
+function IM:AddEntry(entry)
+    local cfg = GetCfg()
+    if not cfg then return end
+    entry = NormalizeEntry(entry)
+    local key = EntryKey(entry)
+    for _, e in ipairs(cfg.items) do
+        if EntryKey(NormalizeEntry(e)) == key then return end
+    end
+    cfg.items[#cfg.items + 1] = entry
     self:Init()
 end
 
--- 移除物品（UI 调用后需调用 Init）
-function IM:RemoveItem(itemID)
+function IM:AddItem(itemID)
+    self:AddEntry({ type = "item", id = itemID })
+end
+
+function IM:RemoveEntry(key)
     local cfg = GetCfg()
     if not cfg then return end
-    for i, id in ipairs(cfg.items) do
-        if id == itemID then
+    for i, raw in ipairs(cfg.items) do
+        if EntryKey(NormalizeEntry(raw)) == key then
             table.remove(cfg.items, i)
             break
         end
@@ -516,35 +615,40 @@ function IM:RemoveItem(itemID)
     self:Init()
 end
 
--- 异步物品数据到达后刷新图标贴图
+function IM:RemoveItem(itemID)
+    self:RemoveEntry("item:" .. tostring(itemID))
+end
+
 function IM:RefreshItemNames()
-    for _, itemID in ipairs(itemOrder) do
-        local frame = iconFrames[itemID]
+    for _, entry in ipairs(itemOrder) do
+        local frame = iconFrames[EntryKey(entry)]
         if frame and frame.Icon then
-            local data = GetItemData(itemID)
-            if data and data.icon then
-                frame.Icon:SetTexture(data.icon)
+            if entry.type == "spell" then
+                local d = GetSpellData(entry.id)
+                if d and d.icon then frame.Icon:SetTexture(d.icon) end
+            else
+                local d = GetItemData(entry.id)
+                if d and d.icon then frame.Icon:SetTexture(d.icon) end
             end
         end
     end
 end
 
--- 配置变更后重新布局 + 样式（无需重建帧）
 function IM:Refresh()
     if not container then self:Init(); return end
     local cfg = GetCfg()
     if not cfg then return end
-    for _, itemID in ipairs(itemOrder) do
-        local frame = iconFrames[itemID]
+    PositionContainer()
+    for _, entry in ipairs(itemOrder) do
+        local frame = iconFrames[EntryKey(entry)]
         if frame then ApplyStyleToFrame(frame) end
     end
     LayoutIcons()
 end
 
--- 仅刷新物品数量（背包变化时调用）；会重排布局以便隐藏的图标不占位
 function IM:RefreshItemCounts()
-    for _, itemID in ipairs(itemOrder) do
-        local frame = iconFrames[itemID]
+    for _, entry in ipairs(itemOrder) do
+        local frame = iconFrames[EntryKey(entry)]
         if frame then UpdateItemCount(frame) end
     end
     LayoutIcons()

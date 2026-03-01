@@ -49,6 +49,7 @@ ns.UI.POS_ITEMS = {
     ["TOPRIGHT"]    = L.posTR,
     ["TOP"]         = L.posTop,
     ["BOTTOMLEFT"]  = L.posBL,
+    ["BOTTOM"]      = L.posBottom,
     ["BOTTOMRIGHT"] = L.posBR,
     ["CENTER"]      = L.posCenter,
 }

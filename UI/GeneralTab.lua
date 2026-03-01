@@ -119,48 +119,20 @@ function ns.BuildGeneralTab(scroll)
             end)
     end
 
-    UI.AddHeading(scroll, "")
+    UI.AddHeading(scroll, L.minimapButton)
 
-    local editModeBtn = AceGUI:Create("Button")
-    editModeBtn:SetText(L.openEditMode)
-    editModeBtn:SetFullWidth(true)
-    editModeBtn:SetCallback("OnClick", function()
-        if InCombatLockdown() then return end
-        local frame = _G.EditModeManagerFrame
-        if not frame then
-            local loader = (C_AddOns and C_AddOns.LoadAddOn) or LoadAddOn
-            if loader and loader("Blizzard_EditMode") then
-                frame = _G.EditModeManagerFrame
-            end
-        end
-        if frame then
-            if frame.CanEnterEditMode and not frame:CanEnterEditMode() then return end
-            if frame:IsShown() then
-                HideUIPanel(frame)
-            else
-                ShowUIPanel(frame)
-            end
-        end
-    end)
-    scroll:AddChild(editModeBtn)
-
-    local cdmBtn = AceGUI:Create("Button")
-    cdmBtn:SetText(L.openCDMSettings)
-    cdmBtn:SetFullWidth(true)
-    cdmBtn:SetCallback("OnClick", function()
-        if InCombatLockdown() then return end
-        if ns._settingsFrame then
-            ns._settingsFrame:Release()
-            ns._settingsFrame = nil
-        end
-        if SettingsPanel and SettingsPanel:IsShown() then
-            HideUIPanel(SettingsPanel)
-        end
-        C_Timer.After(0.1, function()
-            if CooldownViewerSettings and CooldownViewerSettings.ShowUIPanel then
-                CooldownViewerSettings:ShowUIPanel(false)
+    UI.AddCheckbox(scroll, L.showMinimap,
+        function() return not (ns.db.minimap and ns.db.minimap.hide) end,
+        function(v)
+            ns.db.minimap.hide = not v
+            local icon = LibStub("LibDBIcon-1.0", true)
+            if icon then
+                if v then
+                    icon:Show("CDFlow")
+                else
+                    icon:Hide("CDFlow")
+                end
             end
         end)
-    end)
-    scroll:AddChild(cdmBtn)
+
 end

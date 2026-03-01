@@ -83,6 +83,15 @@ function Style:ApplyIcon(button, w, h, zoom, borderSize)
         button._cdf_crop = crop
         button._cdf_ratio = ratio
     end
+    local hasTexture = button.Icon:GetTexture() ~= nil
+    if hasTexture then
+        if button.Icon:GetAlpha() ~= 1 then
+            button.Icon:SetAlpha(1)
+        end
+    elseif button.Icon:GetAlpha() ~= 0 then
+        -- 复用帧贴图尚未写入时先隐藏图层，避免黑框
+        button.Icon:SetAlpha(0)
+    end
 
     for _, swipe in ipairs(button._cdf_swipes) do
         if not swipe._cdf_squareSwipe then
@@ -116,6 +125,7 @@ function Style:ApplyIcon(button, w, h, zoom, borderSize)
             button._cdf_border:ClearAllPoints()
             button._cdf_border:SetAllPoints(button)
         end
+        button._cdf_border:SetFrameLevel(button:GetFrameLevel() + 1)
         if button._cdf_borderSize ~= borderSize then
             button._cdf_border:SetBackdrop({
                 edgeFile = SQUARE_MASK,
