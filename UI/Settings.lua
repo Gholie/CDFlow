@@ -6,13 +6,14 @@ local AceGUI
 
 local CHANGELOG = {
     {
-        "v3.2.1",
+        "v3.3.0",
+        "新增TTS自定义播报功能，可自定义播报文字或音效文件",
         "监控条添加仅御龙术时显示选项，可制作御龙术监控条",
         "新增小地图按钮"
     },
     { 
         "v3.2.0",
-        "增加buff居中持续监测系统，防止更新不及时",
+        "增加buff持续监测系统，防止更新不及时",
         "高亮特效添加技能可用高亮配置",
         "若干bug修复及体验优化",
     },
@@ -44,8 +45,11 @@ local CHANGELOG_TEXT = BuildChangelog(CHANGELOG)
 
 local function ShowChangelog()
     if ns._changelogFrame then
-        ns._changelogFrame:Release()
-        ns._changelogFrame = nil
+        if ns._changelogFrame.frame:IsShown() then
+            ns._changelogFrame.frame:Hide()
+        else
+            ns._changelogFrame.frame:Show()
+        end
         return
     end
 
@@ -54,11 +58,10 @@ local function ShowChangelog()
     clFrame:SetWidth(400)
     clFrame:SetHeight(500)
     clFrame:SetLayout("Fill")
-    clFrame:SetCallback("OnClose", function(widget)
-        widget:Release()
-        ns._changelogFrame = nil
-    end)
     clFrame:EnableResize(false)
+    clFrame:SetCallback("OnClose", function(widget)
+        widget.frame:Hide()
+    end)
 
     local scroll = AceGUI:Create("ScrollFrame")
     scroll:SetLayout("List")
@@ -165,10 +168,6 @@ local function ToggleSettings()
     frame:SetWidth(520)
     frame:SetHeight(600)
     frame:SetLayout("Fill")
-    frame:SetCallback("OnClose", function(widget)
-        widget:Release()
-        ns._settingsFrame = nil
-    end)
     frame:EnableResize(false)
 
     local f = frame.frame
@@ -265,6 +264,15 @@ local function ToggleSettings()
     btnCDM.frame:SetFrameLevel(f:GetFrameLevel() + 3)
     btnCDM.frame:Show()
     btnCDM:SetCallback("OnClick", DoOpenCDMSettings)
+
+    frame:SetCallback("OnClose", function(widget)
+        dragBar:Hide()
+        clBtn:Hide()
+        btnEM.frame:Hide()
+        btnCDM.frame:Hide()
+        widget:Release()
+        ns._settingsFrame = nil
+    end)
 
     tabs:SelectTab("general")
     ns._settingsFrame = frame
