@@ -248,11 +248,11 @@ function ns.BuildViewerTab(scroll, viewerKey, showPerRow, allowUnlimitedPerRow)
             function() return cfg.growDir end,
             function(v) cfg.growDir = v end)
 
-        UI.AddSlider(scroll, L.buffOffsetX, -400, 400, 1,
+        UI.AddSlider(scroll, L.buffOffsetX, -2000, 2000, 1,
             function() return cfg.buffOffsetX or 0 end,
             function(v) cfg.buffOffsetX = v end)
 
-        UI.AddSlider(scroll, L.buffOffsetY, -400, 400, 1,
+        UI.AddSlider(scroll, L.buffOffsetY, -2000, 2000, 1,
             function() return cfg.buffOffsetY or 0 end,
             function(v) cfg.buffOffsetY = v end)
     else

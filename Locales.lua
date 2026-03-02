@@ -303,6 +303,7 @@ local S = {
     mbCondCombat        = { "仅战斗中显示",     "Only in Combat" },
     mbCondTarget        = { "有目标时显示",     "When Has Target" },
     mbCondDragonriding  = { "仅御龙术时显示",   "Only While Skyriding" },
+    mbCondNotDragonriding = { "除御龙术外均显示", "Except While Skyriding" },
     mbFrameStrata       = { "层级",             "Frame Strata" },
     mbStrataBackground  = { "背景层（置底）",   "Background (Bottom)" },
     mbStrataLow         = { "低层",             "Low" },

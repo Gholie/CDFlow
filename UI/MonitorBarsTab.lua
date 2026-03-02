@@ -247,14 +247,15 @@ local function BuildBarConfig(container, barCfg, rebuildAll)
     container:AddChild(hideCDMCB)
 
     local SHOW_COND_ITEMS = {
-        ["always"]       = L.mbCondAlways,
-        ["combat"]       = L.mbCondCombat,
-        ["target"]       = L.mbCondTarget,
-        ["dragonriding"] = L.mbCondDragonriding,
+        ["always"]          = L.mbCondAlways,
+        ["combat"]          = L.mbCondCombat,
+        ["target"]          = L.mbCondTarget,
+        ["dragonriding"]    = L.mbCondDragonriding,
+        ["not_dragonriding"] = L.mbCondNotDragonriding,
     }
     local condDD = AceGUI:Create("Dropdown")
     condDD:SetLabel(L.mbShowCondition)
-    condDD:SetList(SHOW_COND_ITEMS, { "always", "combat", "target", "dragonriding" })
+    condDD:SetList(SHOW_COND_ITEMS, { "always", "combat", "target", "dragonriding", "not_dragonriding" })
     condDD:SetValue(barCfg.showCondition or "always")
     condDD:SetFullWidth(true)
     condDD:SetCallback("OnValueChanged", function(_, _, val)

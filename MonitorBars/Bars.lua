@@ -900,9 +900,10 @@ local function ShouldBarBeVisible(barCfg)
         return false
     end
     local cond = barCfg.showCondition or (barCfg.combatOnly and "combat") or "always"
-    if cond == "combat"       then return inCombat end
-    if cond == "target"       then return hasTarget end
-    if cond == "dragonriding" then return isDragonriding end
+    if cond == "combat"          then return inCombat end
+    if cond == "target"          then return hasTarget end
+    if cond == "dragonriding"    then return isDragonriding end
+    if cond == "not_dragonriding" then return not isDragonriding end
     return true
 end
 
