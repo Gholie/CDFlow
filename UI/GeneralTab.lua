@@ -72,6 +72,19 @@ function ns.BuildGeneralTab(scroll)
     descIM:SetFontObject(GameFontHighlightSmall)
     moduleGroup:AddChild(descIM)
 
+    local cbTTS = AceGUI:Create("CheckBox")
+    cbTTS:SetLabel(L.moduleTTS)
+    cbTTS:SetValue(mods.tts)
+    cbTTS:SetFullWidth(true)
+    cbTTS:SetCallback("OnValueChanged", function(_, _, val) mods.tts = val end)
+    moduleGroup:AddChild(cbTTS)
+
+    local descTTS = AceGUI:Create("Label")
+    descTTS:SetText("    |cffaaaaaa" .. L.moduleTTSD .. "|r")
+    descTTS:SetFullWidth(true)
+    descTTS:SetFontObject(GameFontHighlightSmall)
+    moduleGroup:AddChild(descTTS)
+
     if mods.cdmBeautify then
 
         UI.AddHeading(scroll, L.generalSettings)

@@ -8,6 +8,7 @@ ns.defaults = {
         monitorBars = true,
         trackedBars = true,
         itemMonitor = true,
+        tts         = true,
     },
 
     -- 全局样式
@@ -269,6 +270,10 @@ ns.defaults = {
             offsetY   = 0,
         },
     },
+
+    -- TTS 自定义播报别名：[spellID] = "自定义文字"
+    -- 当冷却管理器触发 TTS 播报时，用自定义文字替代默认技能名称
+    ttsAliases = {},
 
     -- 小地图按钮
     minimap = {

@@ -477,6 +477,73 @@ local function RegisterTrackedBarsHooks()
     end
 end
 
+------------------------------------------------------
+-- TTS 自定义播报 hook
+--
+--   不能直接替换 CooldownViewerAlert_PlayAlert：
+--   直接赋值会把该全局函数标记为"tainted"，
+--   导致 Blizzard 后续代码（TriggerAvailableAlert → RefreshData → ...）
+--   在访问 secret value（wasOnGCDLookup 等）时报错。
+--
+--   采用hooksecurefunc 后置钩子：
+--   原函数在安全上下文中运行完毕后，钩子才执行（addon 上下文），
+--   不会污染 Blizzard 调用栈。
+--   由于 TTS 是 QueuedLocalPlayback（入队异步），钩子在同一 Lua tick
+--   内调用 StopSpeakingText() 可在实际播放前取消原始语音，
+--   再用 SpeakText() 改为自定义文字朗读。
+------------------------------------------------------
+
+local function SetupTTSHook()
+    if type(CooldownViewerAlert_PlayAlert) ~= "function" then return end
+
+    local function ResolveEntry(entry)
+        if type(entry) ~= "table" or not entry.mode then return nil end
+        return entry.mode,
+               entry.text  or "",
+               entry.sound or "",
+               entry.soundChannel or "Master"
+    end
+
+    hooksecurefunc("CooldownViewerAlert_PlayAlert", function(cooldownItem, _spellName, alert)
+        local aliases = ns.db and ns.db.ttsAliases
+        if not aliases then return end
+
+        -- 仅处理 TTS 播报（payload == CooldownViewerSound.TextToSpeech）
+        if not (CooldownViewerAlert_GetPayload and CooldownViewerSound) then return end
+        if CooldownViewerAlert_GetPayload(alert) ~= CooldownViewerSound.TextToSpeech then return end
+        -- 从 cooldownInfo.spellID 读取注册时的基础技能 ID（固定整数，非 secret）。
+        local info = cooldownItem and cooldownItem.cooldownInfo
+        if not info then return end
+
+        local spellID
+        pcall(function() spellID = info.spellID end)
+        if not spellID then return end
+
+        -- 同时检查 overrideSpellID，兼容天赋替换技能的别名
+        local entry = aliases[spellID]
+        if not entry then
+            pcall(function()
+                if info.overrideSpellID then
+                    entry = aliases[info.overrideSpellID]
+                end
+            end)
+        end
+        if not entry then return end
+
+        local mode, text, sound, channel = ResolveEntry(entry)
+        if not mode then return end
+
+        -- 取消原始 TTS，防止与自定义播报重叠
+        C_VoiceChat.StopSpeakingText()
+
+        if mode == "text" and text ~= "" then
+            TextToSpeechFrame_PlayCooldownAlertMessage(alert, text, false)
+        elseif mode == "sound" and sound ~= "" then
+            PlaySoundFile(sound, channel or "Master")
+        end
+    end)
+end
+
 local VIEWER_SET = {}
 
 local function SetupGlowHooks()
@@ -590,6 +657,13 @@ initFrame:SetScript("OnEvent", function(_, _, addonName)
 
     if mods.trackedBars then
         RegisterTrackedBarsHooks()
+    end
+
+    -- TTS hook：等待 Blizzard_CooldownViewer 加载后执行（仅在 TTS 模块开启时）
+    if mods.tts then
+        EventUtil.ContinueOnAddOnLoaded("Blizzard_CooldownViewer", function()
+            SetupTTSHook()
+        end)
     end
 
     if mods.cdmBeautify and mods.monitorBars and MB then

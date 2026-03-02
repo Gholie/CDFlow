@@ -422,6 +422,33 @@ local S = {
     viPreviewErr        = { "无效ID",           "Invalid ID" },
     viPreviewLoading    = { "加载中...",         "Loading..." },
 
+    -- TTS 自定义播报
+    ttsAliases          = { "自定义播报",            "Custom Alerts" },
+    ttsAliasHint        = { "自定义系统冷却管理器中的警报语音，用于覆盖系统的「文本转语音」。\n添加前注意：需先在对应技能上绑定「文本转语音」警报，否则不会触发。",
+                            "Customize the Cooldown Manager's alert voice to override the system's 'Text to Speech'.\nNote: you must first bind a 'Text to Speech' alert to the spell, otherwise it will not trigger." },
+    ttsAliasSpellID     = { "技能 ID",              "Spell ID" },
+    ttsAliasCustomText  = { "自定义播报文字",        "Custom TTS Text" },
+    ttsAliasAdd         = { "添加/更新",             "Add/Update" },
+    ttsAliasRemove      = { "删除",                  "Remove" },
+    ttsAliasListTitle   = { "当前播报替换列表",      "Current TTS Aliases" },
+    ttsAliasPreviewOk   = { "技能：%s",              "Spell: %s" },
+    ttsAliasPreviewErr  = { "无效的技能ID",          "Invalid spell ID" },
+
+    -- TTS 播报方式 & 音效
+    ttsMode             = { "播报方式",                                         "Alert Mode" },
+    ttsModeText         = { "文字覆盖（替换 TTS 播报内容）",                   "Text Override (replace TTS content)" },
+    ttsModeSound        = { "自定义音效（触发时播放音频）",                     "Custom Sound (play audio on trigger)" },
+    ttsFilePath         = { "音效文件路径",                                     "Sound File Path" },
+    ttsFormTitle        = { "添加 / 编辑条目",                                  "Add / Edit Entry" },
+    ttsSoundChannel     = { "音效频道",                                         "Sound Channel" },
+    ttsSoundHint        = { "支持相对路径，示例: Interface\\AddOns\\CDFlow\\Sounds\\alert.ogg",
+                            "Relative paths supported. Example: Interface\\AddOns\\CDFlow\\Sounds\\alert.ogg" },
+    ttsChanMaster       = { "主音量",   "Master" },
+    ttsChanSFX          = { "效果",     "SFX" },
+    ttsChanAmbience     = { "环境",     "Ambience" },
+    ttsChanMusic        = { "音乐",     "Music" },
+    ttsChanDialog       = { "对话",     "Dialog" },
+
     -- 功能模块
     moduleManage        = { "功能模块",                                       "Modules" },
     moduleReloadHint    = { "切换模块后需 /reload 重载界面生效",              "Module changes require /reload to take effect" },
@@ -433,6 +460,9 @@ local S = {
     moduleTrackedBarsD  = { "美化冷却管理器中追踪状态栏的外观", "Beautify the appearance of the native tracked status bars" },
     moduleItemMonitor   = { "物品监控",                                       "Item Monitor" },
     moduleItemMonitorD  = { "监控主动饰品，药水等冷却",         "Monitor cooldowns for active trinkets, potions, etc." },
+    moduleTTS           = { "自定义播报",                                      "Custom Alerts" },
+    moduleTTSD          = { "覆盖冷却管理器的「文本转语音」警报，自定义播报文字或音效文件",
+                            "Override Cooldown Manager's Text to Speech alerts with custom text or sound files" },
 }
 
 -- 构建 L 表

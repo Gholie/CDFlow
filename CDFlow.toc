@@ -41,5 +41,6 @@ UI\HighlightTab.lua
 UI\ProfilesTab.lua
 UI\TrackedBarsTab.lua
 UI\MonitorBarsTab.lua
+UI\TTSTab.lua
 UI\Settings.lua
 MinimapButton.lua

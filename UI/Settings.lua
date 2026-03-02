@@ -94,6 +94,9 @@ local function GetTabList()
     if not mods or mods.itemMonitor then
         tabs[#tabs + 1] = { value = "itemMonitor", text = L.itemMonitor }
     end
+    if not mods or mods.tts then
+        tabs[#tabs + 1] = { value = "tts", text = L.moduleTTS }
+    end
     tabs[#tabs + 1] = { value = "profiles", text = L.profiles }
     return tabs
 end
@@ -132,6 +135,10 @@ local function OnTabSelected(container, _, group)
     elseif group == "monitorBars" then
         if ns.BuildMonitorBarsTab then
             ns.BuildMonitorBarsTab(scroll)
+        end
+    elseif group == "tts" then
+        if ns.BuildTTSTab then
+            ns.BuildTTSTab(scroll)
         end
     elseif group == "profiles" then
         ns.BuildProfilesTab(scroll)
