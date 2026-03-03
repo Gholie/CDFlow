@@ -310,6 +310,8 @@ local S = {
     mbStrataMedium      = { "中层（默认）",     "Medium (Default)" },
     mbStrataHigh        = { "高层",             "High" },
     mbTextAnchor        = { "文字锚点",         "Text Anchor" },
+    mbSmoothAnimation   = { "平滑动画",         "Smooth Animation" },
+    mbSmoothAnimationTip = { "开启后，层数增加时条会平滑填充（仅对堆叠类生效）", "Enable smooth filling when stack count increases (Stacks only)" },
     mbLoadClass         = { "载入职业",         "Load Class" },
 
     -- 增益自定义分组

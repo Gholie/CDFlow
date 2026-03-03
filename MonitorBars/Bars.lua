@@ -21,6 +21,9 @@ local elapsed = 0
 local inCombat = false
 local frameTick = 0
 
+-- 分段条波形填充速度：每秒填充的格数（每格约 83ms）
+local STACK_FILL_SPEED = 12
+
 -- 御龙术（Skyriding）检测
 -- 主判断：御龙术动作条占据 BonusBar slot 11 / offset 5
 -- 次判断：canGlide == true 说明玩家骑乘了御龙坐骑（不再要求 powerBar 非零，
@@ -597,9 +600,11 @@ UpdateStackBar = function(barFrame)
     local isSecret = issecretvalue and issecretvalue(stacks)
     local rawStacks = stacks
 
+    local stacksResolved = true
     local maxStacks = cfg.maxStacks or 5
     local segs = barFrame._segments
     if segs then
+        -- Arc detection（修改 stacks 的值，不直接渲染）
         if isSecret then
             local lastFeed = barFrame._arcFeedFrame or 0
             if lastFeed == frameTick then
@@ -607,13 +612,12 @@ UpdateStackBar = function(barFrame)
             elseif lastFeed > 0 then
                 stacks = GetExactCount(barFrame, maxStacks)
             else
-                stacks = 0
+                stacksResolved = false
             end
-            barFrame._arcResolvedStacks = stacks
             FeedArcDetectors(barFrame, rawStacks, maxStacks)
             barFrame._arcFeedFrame = frameTick
-            for j = 1, #segs do
-                segs[j]:SetValue(j <= stacks and 1 or 0)
+            if stacksResolved then
+                barFrame._arcResolvedStacks = stacks
             end
         else
             barFrame._arcFeedFrame = 0
@@ -623,8 +627,31 @@ UpdateStackBar = function(barFrame)
                     if det then det:SetValue(0) end
                 end
             end
-            for i = 1, #segs do
-                segs[i]:SetValue(i <= stacks and 1 or 0)
+        end
+
+        -- 设置动画目标，波形渲染由 AnimateStackBars 每帧处理
+        if stacksResolved then
+            local prevDisplay = barFrame._displayStacks
+            local smooth = (cfg.smoothAnimation ~= false)
+            if prevDisplay == nil or not smooth then
+                -- 首次初始化或禁用平滑动画：直接跳至当前层数
+                barFrame._displayStacks = stacks
+                barFrame._targetStacks  = stacks
+                for i = 1, #segs do
+                    segs[i]:SetValue(i <= stacks and 1 or 0)
+                end
+                ApplySegmentColors(barFrame, stacks)
+            else
+                barFrame._targetStacks = stacks
+                if stacks < prevDisplay then
+                    -- 层数减少：立即收回，响应迅速
+                    barFrame._displayStacks = stacks
+                    for i = 1, #segs do
+                        segs[i]:SetValue(i <= stacks and 1 or 0)
+                    end
+                    ApplySegmentColors(barFrame, stacks)
+                end
+                -- 层数增加的部分由 AnimateStackBars 的波形动画处理
             end
         end
     end
@@ -634,9 +661,11 @@ UpdateStackBar = function(barFrame)
         barFrame._lastKnownStacks = (not isSecret) and stacks or (barFrame._lastKnownStacks or 0)
     end
 
-    ApplySegmentColors(barFrame, stacks)
+    if stacksResolved then
+        ApplySegmentColors(barFrame, stacks)
+    end
 
-    if cfg.showText ~= false and barFrame._text then
+    if stacksResolved and cfg.showText ~= false and barFrame._text then
         barFrame._text:SetText(tostring(stacks))
     end
 end
@@ -871,9 +900,41 @@ local function UpdateAllBars()
     end
 end
 
+-- 每帧推进 stack 类型分段条的波形填充动画
+local function AnimateStackBars(dt)
+    for _, barFrame in pairs(activeFrames) do
+        local cfg = barFrame._cfg
+        if cfg and cfg.barType == "stack" and cfg.smoothAnimation ~= false then
+            local target  = barFrame._targetStacks
+            local display = barFrame._displayStacks
+            if target ~= nil and display ~= nil and display < target then
+                local diff = target - display
+                local speed = STACK_FILL_SPEED
+                if diff > 1 then
+                    speed = speed * diff
+                end
+                display = math.min(target, display + speed * dt)
+                barFrame._displayStacks = display
+
+                local segs = barFrame._segments
+                if segs then
+                    for i = 1, #segs do
+                        -- 波形进度：第 i 格在 display-(i-1) 处，clamp 到 [0,1]
+                        segs[i]:SetValue(math.max(0, math.min(1, display - (i - 1))))
+                    end
+                end
+            end
+        end
+    end
+end
+
 local updateFrame = CreateFrame("Frame")
 updateFrame:SetScript("OnUpdate", function(_, dt)
     frameTick = frameTick + 1
+
+    -- 波形动画每帧驱动（不节流）
+    AnimateStackBars(dt)
+
     elapsed = elapsed + dt
     if elapsed < UPDATE_INTERVAL then return end
     elapsed = 0

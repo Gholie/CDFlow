@@ -118,7 +118,8 @@ local function NewBarDefaults(id, barType, spellID, spellName, unit)
         showCondition   = "always",
         frameStrata     = "MEDIUM",
         textAnchor      = "RIGHT",
-        specs      = { GetSpecialization() or 1 },
+        smoothAnimation = true,
+        specs           = { GetSpecialization() or 1 },
     }
 end
 
@@ -275,6 +276,24 @@ local function BuildBarConfig(container, barCfg, rebuildAll)
             MB:RebuildAllBars()
         end)
         container:AddChild(maxSlider)
+        
+        local smoothCB = AceGUI:Create("CheckBox")
+        smoothCB:SetLabel(L.mbSmoothAnimation)
+        smoothCB:SetValue(barCfg.smoothAnimation ~= false)
+        smoothCB:SetFullWidth(true)
+        smoothCB:SetCallback("OnValueChanged", function(_, _, val)
+            barCfg.smoothAnimation = val
+            MB:RebuildAllBars()
+        end)
+        smoothCB:SetCallback("OnEnter", function(widget)
+            GameTooltip:SetOwner(widget.frame, "ANCHOR_TOPRIGHT")
+            GameTooltip:SetText(L.mbSmoothAnimationTip, nil, nil, nil, nil, true)
+            GameTooltip:Show()
+        end)
+        smoothCB:SetCallback("OnLeave", function()
+            GameTooltip:Hide()
+        end)
+        container:AddChild(smoothCB)
     else
         local chargeSlider = AceGUI:Create("Slider")
         chargeSlider:SetLabel(L.mbMaxCharges)
