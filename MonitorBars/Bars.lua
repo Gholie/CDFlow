@@ -390,8 +390,11 @@ function MB:CreateBarFrame(barCfg)
     if activeFrames[id] then return activeFrames[id] end
 
     local f = CreateFrame("Frame", "CDFlowMonitorBar" .. id, UIParent, "BackdropTemplate")
-    f:SetSize(barCfg.width, barCfg.height)
-    f:SetPoint("CENTER", UIParent, "CENTER", barCfg.posX, barCfg.posY)
+    local w, h = MB.getNearestPixel(barCfg.width, barCfg.scale), MB.getNearestPixel(barCfg.height, barCfg.scale)
+    f:SetSize(w, h)
+    local pX = MB.getNearestPixel(barCfg.posX, barCfg.scale)
+    local pY = MB.getNearestPixel(barCfg.posY, barCfg.scale)
+    f:SetPoint("CENTER", UIParent, "CENTER", pX, pY)
     local strata = barCfg.frameStrata or "MEDIUM"
     local baseLevel = GetBaseFrameLevelByStrata(strata)
     f:SetFrameStrata(strata)
@@ -419,7 +422,7 @@ function MB:CreateBarFrame(barCfg)
     f._border:SetBlendMode("BLEND")
     f._border:Hide()
 
-    local iconSize = barCfg.height
+    local iconSize = h
     f._icon = f:CreateTexture(nil, "ARTWORK")
     f._icon:SetSize(iconSize, iconSize)
     f._icon:SetPoint("LEFT", f, "LEFT", 0, 0)
@@ -463,44 +466,99 @@ function MB:CreateBarFrame(barCfg)
     f:RegisterForDrag("LeftButton")
     f:SetScript("OnDragStart", function(self)
         if ns.db.monitorBars.locked then return end
-        self:StartMoving()
+        
+        self:SetToplevel(true)
+        local effScale = self:GetEffectiveScale()
+        
+        local sX, sY = GetCursorPosition()
+        sX, sY = sX / effScale, sY / effScale
+        
+        local centerX, centerY = self:GetCenter()
+        local xOffset = centerX - sX
+        local yOffset = centerY - sY
+        
         self:SetScript("OnUpdate", function(s)
-            local cx, cy = s:GetCenter()
-            local p = s:GetParent()
-            if p and p == UIParent then
-                local posX = MB.rounded(cx - p:GetWidth() * 0.5, 1)
-                local posY = MB.rounded(cy - p:GetHeight() * 0.5, 1)
-                if s._posLabel then
-                    s._posLabel:SetFormattedText("X: %.1f  Y: %.1f", posX, posY)
-                end
+            local currX, currY = GetCursorPosition()
+            currX, currY = currX / effScale, currY / effScale
+            
+            local newCenterX = currX + xOffset
+            local newCenterY = currY + yOffset
+            
+            local p = UIParent
+            local pScale = p:GetEffectiveScale()
+            local uCenterX, uCenterY = p:GetCenter()
+            
+            local worldX = newCenterX * effScale
+            local worldY = newCenterY * effScale
+            local pWorldX = uCenterX * pScale
+            local pWorldY = uCenterY * pScale
+            
+            local worldDiffX = worldX - pWorldX
+            local worldDiffY = worldY - pWorldY
+            
+            local valX = worldDiffX / pScale 
+            local valY = worldDiffY / pScale
+            
+            local setX = valX * (pScale / effScale)
+            local setY = valY * (pScale / effScale)
+            
+            setX = MB.getNearestPixel(setX, effScale)
+            setY = MB.getNearestPixel(setY, effScale)
+            
+            s:ClearAllPoints()
+            s:SetPoint("CENTER", p, "CENTER", setX, setY)
+            
+            if s._posLabel then
+                local txt = string.format("X: %.1f  Y: %.1f", setX, setY)
+                s._posLabel:SetText(txt)
             end
         end)
     end)
     f:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
         self:SetScript("OnUpdate", nil)
+        
         local cx, cy = self:GetCenter()
-        local p = self:GetParent()
-        if p and p == UIParent then
-            barCfg.posX = MB.rounded(cx - p:GetWidth() * 0.5, 1)
-            barCfg.posY = MB.rounded(cy - p:GetHeight() * 0.5, 1)
-        else
-            local _, _, _, x, y = self:GetPoint(1)
-            barCfg.posX = MB.rounded(x or 0, 1)
-            barCfg.posY = MB.rounded(y or 0, 1)
-        end
+        local p = UIParent
+        local pScale = p:GetEffectiveScale()
+        local effScale = self:GetEffectiveScale()
+        
+        local uCenterX, uCenterY = p:GetCenter()
+        local worldX = cx * effScale
+        local worldY = cy * effScale
+        local pWorldX = uCenterX * pScale
+        local pWorldY = uCenterY * pScale
+        
+        local worldDiffX = worldX - pWorldX
+        local worldDiffY = worldY - pWorldY
+        
+        local valX = worldDiffX / pScale
+        local valY = worldDiffY / pScale
+        
+        local setX = valX * (pScale / effScale)
+        local setY = valY * (pScale / effScale)
+        
+        setX = MB.getNearestPixel(setX, effScale)
+        setY = MB.getNearestPixel(setY, effScale)
+        
+        barCfg.posX = setX
+        barCfg.posY = setY
+        
         self:ClearAllPoints()
-        self:SetPoint("CENTER", UIParent, "CENTER", barCfg.posX, barCfg.posY)
+        self:SetPoint("CENTER", p, "CENTER", setX, setY)
         UpdatePosLabel(self)
     end)
 
     f:SetScript("OnMouseWheel", function(self, delta)
         if ns.db.monitorBars.locked then return end
-        local step = IsControlKeyDown() and 1 or 0.1
+        local effScale = self:GetEffectiveScale()
+        local pp = MB.getPixelPerfectScale(effScale)
+        
+        local step = IsControlKeyDown() and (pp * 10) or pp
+        
         if IsShiftKeyDown() then
-            barCfg.posX = MB.rounded((barCfg.posX or 0) + delta * step, 1)
+            barCfg.posX = MB.getNearestPixel((barCfg.posX or 0) + delta * step, effScale)
         else
-            barCfg.posY = MB.rounded((barCfg.posY or 0) + delta * step, 1)
+            barCfg.posY = MB.getNearestPixel((barCfg.posY or 0) + delta * step, effScale)
         end
         self:ClearAllPoints()
         self:SetPoint("CENTER", UIParent, "CENTER", barCfg.posX, barCfg.posY)
