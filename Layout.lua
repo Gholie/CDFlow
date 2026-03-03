@@ -187,7 +187,13 @@ local function UpdateViewerSizeToMatchIcons(viewer, icons)
     local curW = viewer:GetWidth()
     local curH = viewer:GetHeight()
     if curW and curH and (math.abs(curW - targetW) >= 1 or math.abs(curH - targetH) >= 1) then
-        viewer:SetSize(targetW, targetH)
+        -- 延迟执行 SetSize 以避免在受保护的调用链中触发 ADDON_ACTION_BLOCKED 错误
+        -- 这个错误可能发生在某些事件（如 SPELLS_CHANGED）触发 RefreshLayout 时
+        C_Timer.After(0, function()
+            if viewer and viewer.SetSize then
+                viewer:SetSize(targetW, targetH)
+            end
+        end)
     end
 end
 
