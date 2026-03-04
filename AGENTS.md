@@ -20,11 +20,15 @@ Key new APIs: `C_CooldownViewer` for CDM data access, `DurationObject` for coold
 
 Modules loaded in order via `CDFlow.toc` (after `Libs/libs.xml`):
 
-### Core/
+### Root & Core
+- `Locales.lua` — Localization strings (`ns.L`)
 - `Core/Defaults.lua` — default config schema + `DeepCopy` utility
 - `Core/Serializer.lua` — Base64 encode/decode, Lua serialization, config import/export
 - `Core/Migration.lua` — old data migration logic, exports `ns.MigrateOldData`
 - `Core/Config.lua` — AceDB-3.0 initialization, `CDFlowDB` SavedVariables management
+- `Init.lua` — addon entry point, event orchestration, hooks into WoW's native cooldown viewers
+- `Visibility.lua` — Smart visibility control based on combat/game state
+- `MinimapButton.lua` — LibDataBroker/LibDBIcon integration
 
 ### Style/
 - `Style/Icon.lua` — creates `ns.Style`; icon sizing/cropping, border, mask replacement; shared font resolver `ns.ResolveFontPath`
@@ -32,15 +36,18 @@ Modules loaded in order via `CDFlow.toc` (after `Libs/libs.xml`):
 - `Style/Keybind.lua` — keybind text display, action bar binding map, spell ID lookup
 - `Style/Text.lua` — stack count font styling + cooldown countdown text styling
 
-### Layout
-- `Layout.lua` — multi-row layout engine for Essential/Utility viewers; single-row/column for Buff icons; tracked bars direction
+### Layout/
+- `Layout.lua` — multi-row layout engine for Essential/Utility viewers; base layout logic
+- `Layout/BuffGroups.lua` — Custom buff grouping logic and layout
+- `Layout/BuffCentering.lua` — Dynamic centering system for buffs
+- `Layout/TrackedBars.lua` — Layout and styling for tracked status bars (BuffBarCooldownViewer)
 
 ### MonitorBars/
 - `MonitorBars/Scanner.lua` — creates `ns.MonitorBars`; CDM viewer scan (spellID↔cooldownID mapping), spell catalog; exposes `ns.cdmSuppressedCooldownIDs`
 - `MonitorBars/Bars.lua` — bar frame creation/styling, stack/charge/cooldown update logic, secret-value detection, OnUpdate loop, event handlers
 
-### Init
-- `Init.lua` — addon entry point, event orchestration, hooks into WoW's native cooldown viewers, debounced refresh; calls MonitorBars event hooks
+### ItemMonitor
+- `ItemMonitor.lua` — Independent item/spell cooldown tracker with draggable container ("Group A")
 
 ### UI/
 - `UI/Widgets.lua` — creates `ns.UI`; AceGUI widget factory functions, option list constants, font utilities
@@ -49,6 +56,10 @@ Modules loaded in order via `CDFlow.toc` (after `Libs/libs.xml`):
 - `UI/HighlightTab.lua` — highlight effects tab (skill glow + buff glow config)
 - `UI/ProfilesTab.lua` — profile management tab (create/switch/copy/delete/reset, LibDualSpec, import/export)
 - `UI/MonitorBarsTab.lua` — monitor bar settings tab (bar selector, spell catalog, per-bar options)
+- `UI/BuffGroupsTab.lua` — Buff grouping configuration
+- `UI/ItemMonitorTab.lua` — ItemMonitor settings
+- `UI/TrackedBarsTab.lua` — Tracked bars styling settings
+- `UI/TTSTab.lua` — Text-To-Speech configuration
 - `UI/Settings.lua` — settings panel frame, tab routing, slash commands, Blizzard Settings registration
 
 ### Data Flow
@@ -69,6 +80,8 @@ All files share state via `local _, ns = ...`:
 - `ns.L` — created by Locales.lua
 - `ns.defaults` / `ns.DeepCopy` — created by Core/Defaults.lua
 - `ns.MigrateOldData` — created by Core/Migration.lua
+- `ns.ItemMonitor` — created by ItemMonitor.lua
+- `ns.Visibility` — created by Visibility.lua
 
 ### Viewers
 
@@ -78,6 +91,9 @@ Four native WoW viewers are hooked:
 - `BuffIconCooldownViewer` — buff icons
 - `BuffBarCooldownViewer` — tracked status bars
 
+Plus custom modules:
+- `ItemMonitor` — Independent tracker
+
 ### External Libraries (`Libs/`)
 
 - `AceGUI-3.0` — settings panel UI widgets
@@ -85,6 +101,7 @@ Four native WoW viewers are hooked:
 - `LibCustomGlow-1.0` — glow/highlight effects
 - `LibDBIcon-1.0` + `LibDataBroker-1.1` — minimap icon
 - `LibStub`, `CallbackHandler-1.0` — library loading and event callbacks
+- `LibDualSpec-1.0` — dual spec support
 
 ### Config Shape
 
