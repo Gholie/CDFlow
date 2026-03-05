@@ -89,6 +89,10 @@ function ns.BuildGeneralTab(scroll)
 
         UI.AddHeading(scroll, L.generalSettings)
 
+        UI.AddCheckbox(scroll, L.iconBeautify,
+            function() return ns.db.iconBeautify end,
+            function(v) ns.db.iconBeautify = v end)
+
         UI.AddSlider(scroll, L.iconZoom, 0, 0.3, 0.01,
             function() return ns.db.iconZoom end,
             function(v) ns.db.iconZoom = v end)

@@ -62,6 +62,36 @@ end
 
 function Style:ApplyIcon(button, w, h, zoom, borderSize)
     if not button or not button.Icon then return end
+
+    if ns.db and ns.db.iconBeautify == false then
+        if button._cdf_w ~= w or button._cdf_h ~= h then
+            button:SetSize(w, h)
+            button._cdf_w = w
+            button._cdf_h = h
+        end
+        
+        if button._cdf_styled then
+            if button.Icon.SetTexCoord then button.Icon:SetTexCoord(0, 1, 0, 1) end
+            if button._cdf_border then button._cdf_border:Hide() end
+            if button._cdf_overlayRegions then
+                for _, region in ipairs(button._cdf_overlayRegions) do region:SetAlpha(1) end
+            end
+            if button._cdf_roundMaskRegions then
+                for _, region in ipairs(button._cdf_roundMaskRegions) do
+                    if region._cdf_replaced then
+                        region:SetTexture(ns._styleConst.ROUND_MASK_TEX)
+                        region._cdf_replaced = false
+                    end
+                end
+            end
+            if button.DebuffBorder then
+                button.DebuffBorder:SetAlpha(1)
+            end
+            button._cdf_styled = false
+        end
+        return
+    end
+
     EnsureIconCaches(button)
 
     if button._cdf_w ~= w or button._cdf_h ~= h then

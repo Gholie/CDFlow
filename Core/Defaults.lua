@@ -12,6 +12,7 @@ ns.defaults = {
     },
 
     -- 全局样式
+    iconBeautify = true,
     iconZoom    = 0.08,
     borderSize  = 1,
     suppressDebuffBorder = true,
