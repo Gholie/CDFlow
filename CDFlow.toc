@@ -20,6 +20,7 @@ Core\Serializer.lua
 Core\Migration.lua
 Core\Config.lua
 Style\Icon.lua
+Style\Masque.lua
 Style\Glow.lua
 Style\Keybind.lua
 Style\Text.lua
