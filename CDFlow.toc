@@ -14,7 +14,10 @@
 
 Libs\libs.xml
 
-Locales.lua
+Locales\enUS.lua
+Locales\zhCN.lua
+Locales\Locales.lua
+
 Core\Defaults.lua
 Core\Serializer.lua
 Core\Migration.lua
