@@ -389,7 +389,7 @@ function Layout:ScanBuffGroup0Items()
                     }
                 end
             else
-                print(string.format("|cffff4444[CDFlow]|r 无法获取物品法术信息: 物品ID %d", itemID))
+                C_Item.RequestLoadItemDataByID(itemID)
             end
         end
     end
