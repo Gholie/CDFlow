@@ -6,6 +6,10 @@ local AceGUI
 
 local CHANGELOG = {
     {
+        "v3.4.5",
+        "修复饰品与药水组相关bug"
+    },
+    {
         "v3.4.4",
         "Buff分组新增饰品与药水组"
     },
