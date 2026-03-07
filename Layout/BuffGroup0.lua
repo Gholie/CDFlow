@@ -348,51 +348,80 @@ end
 -- 扫描并注册所有需要监控的物品
 function Layout:ScanBuffGroup0Items()
     local cfg = ns.db and ns.db.buffGroup0
-    if not cfg or not cfg.enabled then return end
+    if not cfg or not cfg.enabled then return 0 end
 
-    wipe(iconPool)
+    local oldPool = iconPool
+    local newPool = {}
+    local unresolvedCount = 0
     wipe(autoDetectedItems)
+
+    local function RegisterItem(itemID, isAuto)
+        if not itemID then return end
+        local spellID, duration = GetItemSpellInfo(itemID)
+        if not spellID then
+            C_Item.RequestLoadItemDataByID(itemID)
+            unresolvedCount = unresolvedCount + 1
+            return
+        end
+
+        if not duration then
+            C_Item.RequestLoadItemDataByID(itemID)
+            if C_Spell and C_Spell.RequestLoadSpellData then
+                C_Spell.RequestLoadSpellData(spellID)
+            end
+            unresolvedCount = unresolvedCount + 1
+        end
+
+        local prev = oldPool and oldPool[spellID]
+        local data = newPool[spellID]
+        if not data then
+            data = {
+                itemID = itemID,
+                duration = duration,
+                iconPath = C_Item.GetItemIconByID(itemID),
+                isAuto = isAuto,
+                frame = prev and prev.frame,
+                icon = prev and prev.icon,
+                cooldown = prev and prev.cooldown,
+            }
+            newPool[spellID] = data
+        else
+            if not data.duration and duration then
+                data.duration = duration
+            end
+            if data.isAuto ~= true and isAuto then
+                data.isAuto = true
+            end
+        end
+
+        if isAuto then
+            autoDetectedItems[itemID] = true
+        end
+    end
 
     -- 扫描饰品槽位（13和14）
     if cfg.autoTrinkets then
         for _, slot in ipairs({13, 14}) do
             local itemID = GetInventoryItemID("player", slot)
-            if itemID then
-                local spellID, duration = GetItemSpellInfo(itemID)
-                if spellID then
-                    local iconPath = C_Item.GetItemIconByID(itemID)
-                    iconPool[spellID] = {
-                        itemID = itemID,
-                        duration = duration,
-                        iconPath = iconPath,
-                        isAuto = true,  -- 标记为自动检测
-                    }
-                    autoDetectedItems[itemID] = true
-                end
-            end
+            RegisterItem(itemID, true)
         end
     end
 
     -- 扫描手动添加的物品列表
     if cfg.potionItemIDs then
         for _, itemID in ipairs(cfg.potionItemIDs) do
-            local spellID, duration = GetItemSpellInfo(itemID)
-            if spellID then
-                local iconPath = C_Item.GetItemIconByID(itemID)
-                -- 如果已经被自动检测添加，跳过
-                if not iconPool[spellID] then
-                    iconPool[spellID] = {
-                        itemID = itemID,
-                        duration = duration,
-                        iconPath = iconPath,
-                        isAuto = false,
-                    }
-                end
-            else
-                C_Item.RequestLoadItemDataByID(itemID)
-            end
+            RegisterItem(itemID, false)
         end
     end
+
+    -- 隐藏这次扫描中不再存在的图标
+    for spellID, data in pairs(oldPool) do
+        if not newPool[spellID] and data.frame then
+            data.frame:Hide()
+        end
+    end
+
+    iconPool = newPool
 
     -- 为每个spellID创建图标帧
     for spellID, data in pairs(iconPool) do
@@ -403,19 +432,28 @@ function Layout:ScanBuffGroup0Items()
             data.cooldown = cooldown
         end
     end
+
+    return unresolvedCount
 end
 
 -- 异步扫描（等待物品数据加载）
 local scanTimer = nil
 local function ScheduleScan()
     if scanTimer then scanTimer:Cancel() end
+    local unresolved = Layout:ScanBuffGroup0Items()
+    if unresolved <= 0 then return end
+
+    local attempts = 0
     scanTimer = C_Timer.NewTicker(0.5, function()
-        Layout:ScanBuffGroup0Items()
-        if scanTimer then
-            scanTimer:Cancel()
-            scanTimer = nil
+        attempts = attempts + 1
+        local pending = Layout:ScanBuffGroup0Items()
+        if pending <= 0 or attempts >= 10 then
+            if scanTimer then
+                scanTimer:Cancel()
+                scanTimer = nil
+            end
         end
-    end, 10)  -- 最多尝试10次
+    end)
 end
 
 -- 获取自动检测的物品列表（供UI使用）
@@ -614,6 +652,28 @@ function Layout:IsBuffGroup0Previewing()
     return previewActive
 end
 
+local function ActivateGroup0Icon(data)
+    if not data or not data.frame or not data.icon or not data.cooldown or not data.duration then return false end
+
+    -- 应用当前配置的尺寸和样式
+    local cfg = ns.db and ns.db.buffGroup0
+    local iconW = (cfg and cfg.overrideSize and cfg.iconWidth) or 40
+    local iconH = (cfg and cfg.overrideSize and cfg.iconHeight) or 40
+    local zoom = ns.db and ns.db.iconZoom or 0.08
+    local borderSize = ns.db and ns.db.borderSize or 1
+
+    data.frame:SetSize(iconW, iconH)
+    if ns.Style and ns.Style.ApplyIcon then
+        ns.Style:ApplyIcon(data.frame, iconW, iconH, zoom, borderSize)
+    end
+
+    data.frame:Show()
+    data.icon:SetTexture(data.iconPath)
+    data.cooldown:SetCooldown(GetTime(), data.duration)
+    Layout:RefreshBuffGroup0Layout()
+    return true
+end
+
 ------------------------------------------------------
 -- 事件处理
 ------------------------------------------------------
@@ -634,23 +694,14 @@ eventFrame:SetScript("OnEvent", function(self, event, unit, guid, spellID)
         if unit ~= "player" then return end
 
         local data = iconPool[spellID]
-        if data and data.frame and data.duration then
-            -- 应用当前配置的尺寸和样式
-            local cfg = ns.db and ns.db.buffGroup0
-            local iconW = (cfg and cfg.overrideSize and cfg.iconWidth) or 40
-            local iconH = (cfg and cfg.overrideSize and cfg.iconHeight) or 40
-            local zoom = ns.db and ns.db.iconZoom or 0.08
-            local borderSize = ns.db and ns.db.borderSize or 1
-
-            data.frame:SetSize(iconW, iconH)
-            if ns.Style and ns.Style.ApplyIcon then
-                ns.Style:ApplyIcon(data.frame, iconW, iconH, zoom, borderSize)
+        if data and data.frame then
+            if not ActivateGroup0Icon(data) then
+                -- 首次进游戏时，物品/法术数据可能尚未就绪，补扫后短延迟重试一次显示。
+                ScheduleScan()
+                C_Timer.After(0.15, function()
+                    ActivateGroup0Icon(iconPool[spellID])
+                end)
             end
-
-            data.frame:Show()
-            data.icon:SetTexture(data.iconPath)
-            data.cooldown:SetCooldown(GetTime(), data.duration)
-            Layout:RefreshBuffGroup0Layout()
         end
     elseif event == "PLAYER_DEAD" then
         -- 清除所有冷却
