@@ -38,7 +38,10 @@ end
 
 -- 从文本解析持续时间
 local function ParseDuration(text)
-    if not text or text == "" then return nil end
+    local isSafe, isEmpty = pcall(function() return text == "" end)
+    if not isSafe then return nil end
+
+    if not text or isEmpty then return nil end
     -- 排除冷却时间行（避免误判）
     if text:find("冷却") or text:find("Cooldown") then return nil end
 
