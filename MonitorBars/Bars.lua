@@ -297,12 +297,30 @@ local function CreateSegments(barFrame, count, cfg)
     if count < 1 then return end
 
     local container = barFrame._segContainer
-    local totalW = container:GetWidth()
-    local totalH = container:GetHeight()
+    local totalW, totalH = container:GetSize()
+    
+    -- 物理像素对齐计算
+    local ppScale = MB.getPixelPerfectScale()
+    local function ToPixel(v) return MB.rounded(v / ppScale) end
+    local function ToLogical(px) return px * ppScale end
+    
+    local pxTotalW = ToPixel(totalW)
+    local pxTotalH = ToPixel(totalH)
+    
     local gap = cfg.segmentGap ~= nil and cfg.segmentGap or SEGMENT_GAP
+    local pxGap = ToPixel(gap)
+    
     local borderSize = cfg.borderSize or 1
+    local pxBorder = ToPixel(borderSize)
+    if borderSize > 0 and pxBorder == 0 then pxBorder = 1 end
+    
     local perSegBorder = (cfg.borderStyle == "segment")
-    local segW = (totalW - (count - 1) * gap) / count
+    
+    -- 计算分段宽度（处理余数分配）
+    local pxAvailableW = math.max(0, pxTotalW - (count - 1) * pxGap)
+    local pxSegW_Base = math.floor(pxAvailableW / count)
+    local pxRemainder = pxAvailableW % count
+    
     local barColor = cfg.barColor or { 0.2, 0.8, 0.2, 1 }
     local bgColor = cfg.bgColor or { 0.1, 0.1, 0.1, 0.6 }
     local borderColor = cfg.borderColor or { 0, 0, 0, 1 }
@@ -349,21 +367,31 @@ local function CreateSegments(barFrame, count, cfg)
         return
     end
 
+    local currentPxX = 0
+
     for i = 1, count do
-        local xOff = (i - 1) * (segW + gap)
+        -- 将余数像素分配给前几个分段
+        local thisPxSegW = pxSegW_Base
+        if i <= pxRemainder then
+            thisPxSegW = thisPxSegW + 1
+        end
+
+        local logX = ToLogical(currentPxX)
+        local logSegW = ToLogical(thisPxSegW)
+        local logTotalH = ToLogical(pxTotalH)
 
         local bg = container:CreateTexture(nil, "BACKGROUND")
         bg:ClearAllPoints()
-        bg:SetPoint("TOPLEFT", container, "TOPLEFT", xOff, 0)
-        bg:SetSize(segW, totalH)
+        bg:SetPoint("TOPLEFT", container, "TOPLEFT", logX, 0)
+        bg:SetSize(logSegW, logTotalH)
         bg:SetColorTexture(bgColor[1], bgColor[2], bgColor[3], bgColor[4])
         if barFrame._mask then bg:AddMaskTexture(barFrame._mask) end
         bg:Show()
         barFrame._segBGs[i] = bg
 
         local bar = CreateFrame("StatusBar", nil, container)
-        bar:SetPoint("TOPLEFT", container, "TOPLEFT", xOff, 0)
-        bar:SetSize(segW, totalH)
+        bar:SetPoint("TOPLEFT", container, "TOPLEFT", logX, 0)
+        bar:SetSize(logSegW, logTotalH)
         bar:SetStatusBarTexture(texPath)
         bar:SetStatusBarColor(barColor[1], barColor[2], barColor[3], barColor[4])
         bar:SetMinMaxValues(0, 1)
@@ -377,21 +405,52 @@ local function CreateSegments(barFrame, count, cfg)
         end
 
         if perSegBorder and borderSize > 0 then
-            local border = CreateFrame("Frame", nil, container, "BackdropTemplate")
-            border:SetPoint("TOPLEFT", bar, "TOPLEFT", -borderSize, borderSize)
-            border:SetPoint("BOTTOMRIGHT", bar, "BOTTOMRIGHT", borderSize, -borderSize)
-            border:SetBackdrop({
-                edgeFile = "Interface\\BUTTONS\\WHITE8X8",
-                edgeSize = borderSize,
-            })
-            border:SetBackdropBorderColor(borderColor[1], borderColor[2], borderColor[3], borderColor[4])
-            border:SetFrameLevel(bar:GetFrameLevel() + 2)
-            border:EnableMouse(false)  -- 禁用鼠标交互以支持点击穿透
-            border:Show()
-            barFrame._segBorders[i] = border
+            local bFrame = CreateFrame("Frame", nil, container)
+            bFrame:SetFrameLevel(bar:GetFrameLevel() + 2)
+            bFrame:EnableMouse(false)
+            bFrame:SetAllPoints(bar)
+            
+            local function CreateLine(point, rPoint, x, y, w, h)
+                local t = bFrame:CreateTexture(nil, "OVERLAY")
+                t:SetColorTexture(borderColor[1], borderColor[2], borderColor[3], borderColor[4])
+                t:SetPoint(point, bFrame, rPoint, x, y)
+                t:SetSize(w, h)
+                return t
+            end
+            
+            local logBorder = ToLogical(pxBorder)
+            
+            local showRight = true
+            if pxGap <= 0 and i < count then
+                showRight = false
+            end
+            
+            -- 左边框
+            CreateLine("TOPRIGHT", "TOPLEFT", 0, logBorder, logBorder, logTotalH + 2 * logBorder)
+            
+            -- 右边框
+            if showRight then
+                CreateLine("TOPLEFT", "TOPRIGHT", 0, logBorder, logBorder, logTotalH + 2 * logBorder)
+            end
+            
+            -- 上边框
+            local hW = logSegW
+            if not showRight then
+                hW = math.max(0, hW - logBorder)
+            end
+            CreateLine("BOTTOMLEFT", "TOPLEFT", 0, 0, hW, logBorder)
+            
+            -- 下边框
+            CreateLine("TOPLEFT", "BOTTOMLEFT", 0, 0, hW, logBorder)
+
+            bFrame:Show()
+            barFrame._segBorders[i] = bFrame
         end
 
         barFrame._segments[i] = bar
+        
+        -- 更新下一个分段的 X 坐标
+        currentPxX = currentPxX + thisPxSegW + pxGap
     end
 
     if perSegBorder then
