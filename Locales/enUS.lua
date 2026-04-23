@@ -492,5 +492,26 @@ ns.LocaleData["enUS"] = {
     moduleItemMonitorD = "Monitor cooldowns for active trinkets, potions, etc.",
     moduleTTS = "Custom Alerts",
     moduleTTSD = "Override Cooldown Manager's Text to Speech alerts with custom text or sound files",
+    moduleQuiCompat  = "QUI Compatibility",
+    moduleQuiCompatD = "When QUI addon is present, defer stack text and cooldown text styling to QUI. Disable to let CDFlow override QUI's styling.",
+
+    -- Monitor bar frame anchoring
+    mbAnchorFrame        = "Anchor to Frame",
+    mbAnchorFrameNone    = "None (free-floating)",
+    mbAnchorEssential    = "CDM Essential Viewer",
+    mbAnchorUtility      = "CDM Utility Viewer",
+    mbAnchorBuffIcon     = "CDM Buff Icon Viewer",
+    mbAnchorPowerBar          = "QUI Power Bar",
+    mbAnchorSecondaryPowerBar = "QUI Secondary Power Bar",
+    mbAnchorAltPowerBar       = "QUI Alt Power Bar",
+    mbAnchorCustom       = "Custom (type name below)",
+    mbAnchorCustomName   = "Global Frame Name",
+    mbAnchorCustomNameTip = "Enter the global name of any UI frame.\nExamples: QUI_AltPowerBar, QUI_EssentialContainer,\nEssentialCooldownViewer, QUI_DatatextPanel",
+    mbAnchorPoint        = "Bar Attachment Point",
+    mbAnchorRelPoint     = "Frame Attachment Point",
+    mbAnchorOffX         = "X Offset",
+    mbAnchorOffY         = "Y Offset",
+    mbAnchorAutoWidth    = "Auto Width",
+    mbAnchorAutoWidthTip = "Automatically match bar width to the anchor frame's width.",
 }
 
