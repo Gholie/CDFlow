@@ -487,17 +487,24 @@ local function BuildBarConfig(container, barCfg, rebuildAll)
     -- "__CUSTOM__" is a sentinel stored in anchorFrame while the user is in Custom mode
     -- but hasn't confirmed a frame name yet. ResolveAnchorFrame ignores it at runtime.
     do
+        local quiCompatEnabled = rawget(_G, "QUI_RefreshNCDM") ~= nil
+            and ns.db ~= nil and ns.db.modules ~= nil and ns.db.modules.quiCompat == true
         local ANCHOR_FRAME_OPTIONS = {
-            [""]                     = L.mbAnchorFrameNone,
-            ["CDM_Essential"]        = L.mbAnchorEssential,
-            ["CDM_Utility"]          = L.mbAnchorUtility,
-            ["CDM_BuffIcon"]         = L.mbAnchorBuffIcon,
-            ["QUIPowerBar"]          = L.mbAnchorPowerBar,
-            ["QUISecondaryPowerBar"] = L.mbAnchorSecondaryPowerBar,
-            ["QUI_AltPowerBar"]      = L.mbAnchorAltPowerBar,
-            ["CUSTOM"]               = L.mbAnchorCustom,
+            [""]              = L.mbAnchorFrameNone,
+            ["CDM_Essential"] = L.mbAnchorEssential,
+            ["CDM_Utility"]   = L.mbAnchorUtility,
+            ["CDM_BuffIcon"]  = L.mbAnchorBuffIcon,
+            ["CUSTOM"]        = L.mbAnchorCustom,
         }
-        local ANCHOR_FRAME_ORDER = { "", "CDM_Essential", "CDM_Utility", "CDM_BuffIcon", "QUIPowerBar", "QUISecondaryPowerBar", "QUI_AltPowerBar", "CUSTOM" }
+        local ANCHOR_FRAME_ORDER = { "", "CDM_Essential", "CDM_Utility", "CDM_BuffIcon", "CUSTOM" }
+        if quiCompatEnabled then
+            ANCHOR_FRAME_OPTIONS["QUIPowerBar"]          = L.mbAnchorPowerBar
+            ANCHOR_FRAME_OPTIONS["QUISecondaryPowerBar"] = L.mbAnchorSecondaryPowerBar
+            ANCHOR_FRAME_OPTIONS["QUI_AltPowerBar"]      = L.mbAnchorAltPowerBar
+            table.insert(ANCHOR_FRAME_ORDER, #ANCHOR_FRAME_ORDER, "QUIPowerBar")
+            table.insert(ANCHOR_FRAME_ORDER, #ANCHOR_FRAME_ORDER, "QUISecondaryPowerBar")
+            table.insert(ANCHOR_FRAME_ORDER, #ANCHOR_FRAME_ORDER, "QUI_AltPowerBar")
+        end
 
         local currentAnchor = barCfg.anchorFrame or ""
         -- A raw global name not in the preset list (or the sentinel) maps to "CUSTOM"
