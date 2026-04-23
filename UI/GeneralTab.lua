@@ -88,7 +88,7 @@ function ns.BuildGeneralTab(scroll)
     if rawget(_G, "QUI_RefreshNCDM") then
         local cbQuiCompat = AceGUI:Create("CheckBox")
         cbQuiCompat:SetLabel(L.moduleQuiCompat)
-        cbQuiCompat:SetValue(mods.quiCompat ~= false)
+        cbQuiCompat:SetValue(mods.quiCompat == true)
         cbQuiCompat:SetFullWidth(true)
         cbQuiCompat:SetCallback("OnValueChanged", function(_, _, val) mods.quiCompat = val end)
         moduleGroup:AddChild(cbQuiCompat)

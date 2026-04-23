@@ -23,7 +23,7 @@ local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
 
 local function IsQuiCompatActive()
     return rawget(_G, "QUI_RefreshNCDM") ~= nil
-        and (ns.db == nil or ns.db.modules == nil or ns.db.modules.quiCompat ~= false)
+        and (ns.db ~= nil and ns.db.modules ~= nil and ns.db.modules.quiCompat == true)
 end
 
 local VIEWER_KEY = {
