@@ -85,6 +85,21 @@ function ns.BuildGeneralTab(scroll)
     descTTS:SetFontObject(GameFontHighlightSmall)
     moduleGroup:AddChild(descTTS)
 
+    if rawget(_G, "QUI_RefreshNCDM") then
+        local cbQuiCompat = AceGUI:Create("CheckBox")
+        cbQuiCompat:SetLabel(L.moduleQuiCompat)
+        cbQuiCompat:SetValue(mods.quiCompat ~= false)
+        cbQuiCompat:SetFullWidth(true)
+        cbQuiCompat:SetCallback("OnValueChanged", function(_, _, val) mods.quiCompat = val end)
+        moduleGroup:AddChild(cbQuiCompat)
+
+        local descQuiCompat = AceGUI:Create("Label")
+        descQuiCompat:SetText("    |cffaaaaaa" .. L.moduleQuiCompatD .. "|r")
+        descQuiCompat:SetFullWidth(true)
+        descQuiCompat:SetFontObject(GameFontHighlightSmall)
+        moduleGroup:AddChild(descQuiCompat)
+    end
+
     if mods.cdmBeautify then
 
         UI.AddHeading(scroll, L.generalSettings)

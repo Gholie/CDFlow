@@ -137,6 +137,13 @@ local function NewBarDefaults(id, barType, spellID, spellName, unit)
         borderStyle     = "whole",
         segmentGap      = 1,
         hideFromCDM     = false,
+        anchorFrame     = "",
+        anchorPoint     = "TOP",
+        anchorRelPoint  = "BOTTOM",
+        anchorOffX      = 0,
+        anchorOffY      = -2,
+        autoWidth       = false,
+        autoWidthOffset = 0,
         showCondition   = (barType == "duration") and "active_only" or "always",
         frameStrata     = "MEDIUM",
         textAnchor      = "RIGHT",
@@ -476,7 +483,163 @@ local function BuildBarConfig(container, barCfg, rebuildAll)
     end)
     styleGroup:AddChild(strataDD)
 
-    if barCfg.barShape ~= "Ring" then
+    -- Frame Anchor section
+    -- "__CUSTOM__" is a sentinel stored in anchorFrame while the user is in Custom mode
+    -- but hasn't confirmed a frame name yet. ResolveAnchorFrame ignores it at runtime.
+    do
+        local ANCHOR_FRAME_OPTIONS = {
+            [""]                     = L.mbAnchorFrameNone,
+            ["CDM_Essential"]        = L.mbAnchorEssential,
+            ["CDM_Utility"]          = L.mbAnchorUtility,
+            ["CDM_BuffIcon"]         = L.mbAnchorBuffIcon,
+            ["QUIPowerBar"]          = L.mbAnchorPowerBar,
+            ["QUISecondaryPowerBar"] = L.mbAnchorSecondaryPowerBar,
+            ["QUI_AltPowerBar"]      = L.mbAnchorAltPowerBar,
+            ["CUSTOM"]               = L.mbAnchorCustom,
+        }
+        local ANCHOR_FRAME_ORDER = { "", "CDM_Essential", "CDM_Utility", "CDM_BuffIcon", "QUIPowerBar", "QUISecondaryPowerBar", "QUI_AltPowerBar", "CUSTOM" }
+
+        local currentAnchor = barCfg.anchorFrame or ""
+        -- A raw global name not in the preset list (or the sentinel) maps to "CUSTOM"
+        local isCustomMode = currentAnchor == "__CUSTOM__"
+            or (currentAnchor ~= "" and not ANCHOR_FRAME_OPTIONS[currentAnchor])
+        local ddVal = isCustomMode and "CUSTOM"
+            or (ANCHOR_FRAME_OPTIONS[currentAnchor] and currentAnchor or "")
+
+        local anchorDD = AceGUI:Create("Dropdown")
+        anchorDD:SetLabel(L.mbAnchorFrame)
+        anchorDD:SetList(ANCHOR_FRAME_OPTIONS, ANCHOR_FRAME_ORDER)
+        anchorDD:SetValue(ddVal)
+        anchorDD:SetFullWidth(true)
+        anchorDD:SetCallback("OnValueChanged", function(_, _, val)
+            if val == "CUSTOM" then
+                barCfg.anchorFrame = "__CUSTOM__"
+            elseif val == "" then
+                barCfg.anchorFrame = ""
+                MB:RebuildAllBars()
+            else
+                barCfg.anchorFrame = val
+                MB:RebuildAllBars()
+            end
+            rebuildAll()
+        end)
+        styleGroup:AddChild(anchorDD)
+
+        -- Custom frame name editbox — shown while in Custom mode
+        if isCustomMode then
+            local customEB = AceGUI:Create("EditBox")
+            customEB:SetLabel(L.mbAnchorCustomName)
+            customEB:SetText(currentAnchor ~= "__CUSTOM__" and currentAnchor or "")
+            customEB:SetFullWidth(true)
+            customEB:SetCallback("OnEnterPressed", function(_, _, val)
+                val = val and val:match("^%s*(.-)%s*$")
+                barCfg.anchorFrame = (val and val ~= "") and val or "__CUSTOM__"
+                MB:RebuildAllBars()
+                rebuildAll()
+            end)
+            customEB:SetCallback("OnEnter", function(widget)
+                GameTooltip:SetOwner(widget.frame, "ANCHOR_TOPRIGHT")
+                GameTooltip:SetText(L.mbAnchorCustomNameTip, nil, nil, nil, nil, true)
+                GameTooltip:Show()
+            end)
+            customEB:SetCallback("OnLeave", function() GameTooltip:Hide() end)
+            styleGroup:AddChild(customEB)
+        end
+
+        -- Anchor point and offset settings — shown whenever any anchor mode is active
+        if currentAnchor ~= "" then
+            local barAnchorDD = AceGUI:Create("Dropdown")
+            barAnchorDD:SetLabel(L.mbAnchorPoint)
+            barAnchorDD:SetList(TEXT_ANCHOR_ITEMS, TEXT_ANCHOR_ORDER)
+            barAnchorDD:SetValue(barCfg.anchorPoint or "TOP")
+            barAnchorDD:SetFullWidth(true)
+            barAnchorDD:SetCallback("OnValueChanged", function(_, _, val)
+                barCfg.anchorPoint = val
+                MB:RebuildAllBars()
+            end)
+            styleGroup:AddChild(barAnchorDD)
+
+            local relAnchorDD = AceGUI:Create("Dropdown")
+            relAnchorDD:SetLabel(L.mbAnchorRelPoint)
+            relAnchorDD:SetList(TEXT_ANCHOR_ITEMS, TEXT_ANCHOR_ORDER)
+            relAnchorDD:SetValue(barCfg.anchorRelPoint or "BOTTOM")
+            relAnchorDD:SetFullWidth(true)
+            relAnchorDD:SetCallback("OnValueChanged", function(_, _, val)
+                barCfg.anchorRelPoint = val
+                MB:RebuildAllBars()
+            end)
+            styleGroup:AddChild(relAnchorDD)
+
+            local offXSlider = AceGUI:Create("Slider")
+            offXSlider:SetLabel(L.mbAnchorOffX)
+            offXSlider:SetSliderValues(-500, 500, 1)
+            offXSlider:SetValue(barCfg.anchorOffX or 0)
+            offXSlider:SetFullWidth(true)
+            offXSlider:SetCallback("OnValueChanged", function(_, _, val)
+                barCfg.anchorOffX = val
+                MB:RebuildAllBars()
+            end)
+            styleGroup:AddChild(offXSlider)
+
+            local offYSlider = AceGUI:Create("Slider")
+            offYSlider:SetLabel(L.mbAnchorOffY)
+            offYSlider:SetSliderValues(-500, 500, 1)
+            offYSlider:SetValue(barCfg.anchorOffY or -2)
+            offYSlider:SetFullWidth(true)
+            offYSlider:SetCallback("OnValueChanged", function(_, _, val)
+                barCfg.anchorOffY = val
+                MB:RebuildAllBars()
+            end)
+            styleGroup:AddChild(offYSlider)
+
+            if barCfg.barShape ~= "Ring" then
+                local autoWidthCB = AceGUI:Create("CheckBox")
+                autoWidthCB:SetLabel(L.mbAnchorAutoWidth)
+                autoWidthCB:SetValue(barCfg.autoWidth or false)
+                autoWidthCB:SetFullWidth(true)
+                local function ApplyAutoWidth()
+                    if MB.ResolveAnchorFrame then
+                        local anchorFr = MB.ResolveAnchorFrame(barCfg.anchorFrame)
+                        if anchorFr then
+                            local aw = anchorFr:GetWidth()
+                            if aw and aw > 1 then
+                                barCfg.width = MB.getNearestPixel(aw + (barCfg.autoWidthOffset or 0))
+                            end
+                        end
+                    end
+                end
+                autoWidthCB:SetCallback("OnValueChanged", function(_, _, val)
+                    barCfg.autoWidth = val
+                    if val then ApplyAutoWidth() end
+                    MB:RebuildAllBars()
+                    rebuildAll()
+                end)
+                autoWidthCB:SetCallback("OnEnter", function(widget)
+                    GameTooltip:SetOwner(widget.frame, "ANCHOR_TOPRIGHT")
+                    GameTooltip:SetText(L.mbAnchorAutoWidthTip, nil, nil, nil, nil, true)
+                    GameTooltip:Show()
+                end)
+                autoWidthCB:SetCallback("OnLeave", function() GameTooltip:Hide() end)
+                styleGroup:AddChild(autoWidthCB)
+
+                if barCfg.autoWidth then
+                    local awOffsetSlider = AceGUI:Create("Slider")
+                    awOffsetSlider:SetLabel(L.mbAnchorAutoWidthOffset)
+                    awOffsetSlider:SetSliderValues(-100, 100, 1)
+                    awOffsetSlider:SetValue(barCfg.autoWidthOffset or 0)
+                    awOffsetSlider:SetFullWidth(true)
+                    awOffsetSlider:SetCallback("OnValueChanged", function(_, _, val)
+                        barCfg.autoWidthOffset = val
+                        ApplyAutoWidth()
+                        MB:RebuildAllBars()
+                    end)
+                    styleGroup:AddChild(awOffsetSlider)
+                end
+            end
+        end
+    end
+
+    if barCfg.barShape ~= "Ring" and not barCfg.autoWidth then
         local wSlider = AceGUI:Create("Slider")
         wSlider:SetLabel(L.mbBarWidth)
         wSlider:SetSliderValues(20, 500, 1)
@@ -949,10 +1112,12 @@ function ns.BuildMonitorBarsTab(scroll)
     if not cfg then return end
 
     local function RebuildContent()
+        local savedScroll = scroll.localstatus and scroll.localstatus.scrollvalue or 0
         scroll:ReleaseChildren()
         ns.BuildMonitorBarsTab(scroll)
         C_Timer.After(0, function()
             if scroll and scroll.DoLayout then scroll:DoLayout() end
+            if savedScroll > 0 then scroll:SetScroll(savedScroll) end
         end)
     end
 
