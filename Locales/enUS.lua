@@ -511,7 +511,8 @@ ns.LocaleData["enUS"] = {
     mbAnchorRelPoint     = "Frame Attachment Point",
     mbAnchorOffX         = "X Offset",
     mbAnchorOffY         = "Y Offset",
-    mbAnchorAutoWidth    = "Auto Width",
-    mbAnchorAutoWidthTip = "Automatically match bar width to the anchor frame's width.",
+    mbAnchorAutoWidth       = "Auto Width",
+    mbAnchorAutoWidthTip    = "Automatically match bar width to the anchor frame's width.",
+    mbAnchorAutoWidthOffset = "Width Offset (px)",
 }
 

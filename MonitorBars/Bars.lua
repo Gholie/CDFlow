@@ -1576,6 +1576,24 @@ local LOGICAL_ANCHOR_FRAMES = {
         local fn = rawget(_G, "QUI_GetCDMViewerFrame")
         return fn and fn("buffIcon") or rawget(_G, "BuffIconCooldownViewer")
     end,
+    -- QUI power bars: resolve via QUI.QUICore to get the real frame, bypassing the
+    -- hidden placeholder that QUI pre-registers globally before full initialization.
+    -- QUICore is stored as QUI.QUICore (an Ace3 module), not as a bare global.
+    QUIPowerBar = function()
+        local qui = rawget(_G, "QUI")
+        local core = qui and qui.QUICore
+        if core and core.powerBar then return core.powerBar end
+        return rawget(_G, "QUIPowerBar")
+    end,
+    QUISecondaryPowerBar = function()
+        local qui = rawget(_G, "QUI")
+        local core = qui and qui.QUICore
+        if core and core.secondaryPowerBar then return core.secondaryPowerBar end
+        return rawget(_G, "QUISecondaryPowerBar")
+    end,
+    QUI_AltPowerBar = function()
+        return rawget(_G, "QUI_AltPowerBar")
+    end,
 }
 
 local function ResolveAnchorFrame(name)
@@ -1584,6 +1602,7 @@ local function ResolveAnchorFrame(name)
     if resolver then return resolver() end
     return rawget(_G, name)
 end
+MB.ResolveAnchorFrame = ResolveAnchorFrame
 
 local function UpdateFrameAnchor(f, cfg)
     local anchorFr = ResolveAnchorFrame(cfg.anchorFrame)
@@ -1601,7 +1620,7 @@ local function UpdateFrameAnchor(f, cfg)
         local aw = anchorFr:GetWidth()
         if aw and aw > 1 and math.abs((cfg._lastAnchorWidth or 0) - aw) >= 2 then
             cfg._lastAnchorWidth = aw
-            cfg.width = MB.getNearestPixel(aw)
+            cfg.width = MB.getNearestPixel(aw + (cfg.autoWidthOffset or 0))
             f._autoWidthPending = true
             C_Timer.After(0.1, function()
                 f._autoWidthPending = nil
