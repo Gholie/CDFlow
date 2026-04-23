@@ -1564,17 +1564,22 @@ end
 
 -- 逻辑锚点键：映射到 CDM 查看器帧，自动适配 QUI / 原生
 local LOGICAL_ANCHOR_FRAMES = {
-    CDM_Essential = function()
+    -- Native WoW Cooldown Manager viewers (shown when QUI compat is OFF)
+    CDM_Essential = function() return rawget(_G, "EssentialCooldownViewer") end,
+    CDM_Utility   = function() return rawget(_G, "UtilityCooldownViewer") end,
+    CDM_BuffIcon  = function() return rawget(_G, "BuffIconCooldownViewer") end,
+    -- QUI-hosted CDM viewers (shown when QUI compat is ON)
+    QUI_Essential = function()
         local fn = rawget(_G, "QUI_GetCDMViewerFrame")
-        return fn and fn("essential") or rawget(_G, "EssentialCooldownViewer")
+        return fn and fn("essential")
     end,
-    CDM_Utility = function()
+    QUI_Utility = function()
         local fn = rawget(_G, "QUI_GetCDMViewerFrame")
-        return fn and fn("utility") or rawget(_G, "UtilityCooldownViewer")
+        return fn and fn("utility")
     end,
-    CDM_BuffIcon = function()
+    QUI_BuffIcon = function()
         local fn = rawget(_G, "QUI_GetCDMViewerFrame")
-        return fn and fn("buffIcon") or rawget(_G, "BuffIconCooldownViewer")
+        return fn and fn("buffIcon")
     end,
     -- QUI power bars: resolve via QUI.QUICore to get the real frame, bypassing the
     -- hidden placeholder that QUI pre-registers globally before full initialization.

@@ -490,20 +490,32 @@ local function BuildBarConfig(container, barCfg, rebuildAll)
         local quiCompatEnabled = rawget(_G, "QUI_RefreshNCDM") ~= nil
             and ns.db ~= nil and ns.db.modules ~= nil and ns.db.modules.quiCompat == true
         local ANCHOR_FRAME_OPTIONS = {
-            [""]              = L.mbAnchorFrameNone,
-            ["CDM_Essential"] = L.mbAnchorEssential,
-            ["CDM_Utility"]   = L.mbAnchorUtility,
-            ["CDM_BuffIcon"]  = L.mbAnchorBuffIcon,
-            ["CUSTOM"]        = L.mbAnchorCustom,
+            [""]       = L.mbAnchorFrameNone,
+            ["CUSTOM"] = L.mbAnchorCustom,
         }
-        local ANCHOR_FRAME_ORDER = { "", "CDM_Essential", "CDM_Utility", "CDM_BuffIcon", "CUSTOM" }
+        local ANCHOR_FRAME_ORDER = { "", "CUSTOM" }
         if quiCompatEnabled then
+            -- QUI hosts its own CDM viewers and power bars; native WoW viewers are hidden
+            ANCHOR_FRAME_OPTIONS["QUI_Essential"]        = L.mbAnchorQUIEssential
+            ANCHOR_FRAME_OPTIONS["QUI_Utility"]          = L.mbAnchorQUIUtility
+            ANCHOR_FRAME_OPTIONS["QUI_BuffIcon"]         = L.mbAnchorQUIBuffIcon
             ANCHOR_FRAME_OPTIONS["QUIPowerBar"]          = L.mbAnchorPowerBar
             ANCHOR_FRAME_OPTIONS["QUISecondaryPowerBar"] = L.mbAnchorSecondaryPowerBar
             ANCHOR_FRAME_OPTIONS["QUI_AltPowerBar"]      = L.mbAnchorAltPowerBar
-            table.insert(ANCHOR_FRAME_ORDER, #ANCHOR_FRAME_ORDER, "QUIPowerBar")
-            table.insert(ANCHOR_FRAME_ORDER, #ANCHOR_FRAME_ORDER, "QUISecondaryPowerBar")
-            table.insert(ANCHOR_FRAME_ORDER, #ANCHOR_FRAME_ORDER, "QUI_AltPowerBar")
+            table.insert(ANCHOR_FRAME_ORDER, 1, "QUI_AltPowerBar")
+            table.insert(ANCHOR_FRAME_ORDER, 1, "QUISecondaryPowerBar")
+            table.insert(ANCHOR_FRAME_ORDER, 1, "QUIPowerBar")
+            table.insert(ANCHOR_FRAME_ORDER, 1, "QUI_BuffIcon")
+            table.insert(ANCHOR_FRAME_ORDER, 1, "QUI_Utility")
+            table.insert(ANCHOR_FRAME_ORDER, 1, "QUI_Essential")
+        else
+            -- Native WoW Cooldown Manager viewers
+            ANCHOR_FRAME_OPTIONS["CDM_Essential"] = L.mbAnchorEssential
+            ANCHOR_FRAME_OPTIONS["CDM_Utility"]   = L.mbAnchorUtility
+            ANCHOR_FRAME_OPTIONS["CDM_BuffIcon"]  = L.mbAnchorBuffIcon
+            table.insert(ANCHOR_FRAME_ORDER, 1, "CDM_BuffIcon")
+            table.insert(ANCHOR_FRAME_ORDER, 1, "CDM_Utility")
+            table.insert(ANCHOR_FRAME_ORDER, 1, "CDM_Essential")
         end
 
         local currentAnchor = barCfg.anchorFrame or ""
