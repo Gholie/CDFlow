@@ -493,7 +493,7 @@ local function BuildBarConfig(container, barCfg, rebuildAll)
             [""]       = L.mbAnchorFrameNone,
             ["CUSTOM"] = L.mbAnchorCustom,
         }
-        local ANCHOR_FRAME_ORDER = { "", "CUSTOM" }
+        local ANCHOR_FRAME_ORDER = {}
         if quiCompatEnabled then
             -- QUI hosts its own CDM viewers and power bars; native WoW viewers are hidden
             ANCHOR_FRAME_OPTIONS["QUI_Essential"]        = L.mbAnchorQUIEssential
@@ -502,21 +502,23 @@ local function BuildBarConfig(container, barCfg, rebuildAll)
             ANCHOR_FRAME_OPTIONS["QUIPowerBar"]          = L.mbAnchorPowerBar
             ANCHOR_FRAME_OPTIONS["QUISecondaryPowerBar"] = L.mbAnchorSecondaryPowerBar
             ANCHOR_FRAME_OPTIONS["QUI_AltPowerBar"]      = L.mbAnchorAltPowerBar
-            table.insert(ANCHOR_FRAME_ORDER, 1, "QUI_AltPowerBar")
-            table.insert(ANCHOR_FRAME_ORDER, 1, "QUISecondaryPowerBar")
-            table.insert(ANCHOR_FRAME_ORDER, 1, "QUIPowerBar")
-            table.insert(ANCHOR_FRAME_ORDER, 1, "QUI_BuffIcon")
-            table.insert(ANCHOR_FRAME_ORDER, 1, "QUI_Utility")
-            table.insert(ANCHOR_FRAME_ORDER, 1, "QUI_Essential")
+            table.insert(ANCHOR_FRAME_ORDER, "QUI_Essential")
+            table.insert(ANCHOR_FRAME_ORDER, "QUI_Utility")
+            table.insert(ANCHOR_FRAME_ORDER, "QUI_BuffIcon")
+            table.insert(ANCHOR_FRAME_ORDER, "QUIPowerBar")
+            table.insert(ANCHOR_FRAME_ORDER, "QUISecondaryPowerBar")
+            table.insert(ANCHOR_FRAME_ORDER, "QUI_AltPowerBar")
         else
             -- Native WoW Cooldown Manager viewers
             ANCHOR_FRAME_OPTIONS["CDM_Essential"] = L.mbAnchorEssential
             ANCHOR_FRAME_OPTIONS["CDM_Utility"]   = L.mbAnchorUtility
             ANCHOR_FRAME_OPTIONS["CDM_BuffIcon"]  = L.mbAnchorBuffIcon
-            table.insert(ANCHOR_FRAME_ORDER, 1, "CDM_BuffIcon")
-            table.insert(ANCHOR_FRAME_ORDER, 1, "CDM_Utility")
-            table.insert(ANCHOR_FRAME_ORDER, 1, "CDM_Essential")
+            table.insert(ANCHOR_FRAME_ORDER, "CDM_Essential")
+            table.insert(ANCHOR_FRAME_ORDER, "CDM_Utility")
+            table.insert(ANCHOR_FRAME_ORDER, "CDM_BuffIcon")
         end
+        table.insert(ANCHOR_FRAME_ORDER, "")
+        table.insert(ANCHOR_FRAME_ORDER, "CUSTOM")
 
         local currentAnchor = barCfg.anchorFrame or ""
         -- A raw global name not in the preset list (or the sentinel) maps to "CUSTOM"

@@ -1018,6 +1018,26 @@ end
 -- 更新逻辑
 ------------------------------------------------------
 
+local function ApplyThresholdColor(barFrame, currentCount)
+    local cfg = barFrame._cfg
+    if not cfg then return end
+    local segs = barFrame._segments
+    if not segs then return end
+    local threshold1 = cfg.colorThreshold or 0
+    local threshold2 = cfg.colorThreshold2 or 0
+    local c = cfg.barColor or { 0.2, 0.8, 0.2, 1 }
+    if type(currentCount) == "number" then
+        if threshold2 > 0 and currentCount >= threshold2 then
+            c = cfg.thresholdColor2 or { 1, 0, 0, 1 }
+        elseif threshold1 > 0 and currentCount >= threshold1 then
+            c = cfg.thresholdColor or { 1, 0.5, 0, 1 }
+        end
+    end
+    for _, seg in ipairs(segs) do
+        seg:SetStatusBarColor(c[1], c[2], c[3], c[4])
+    end
+end
+
 local function SetStackSegmentsValue(barFrame, value)
     local segs = barFrame._segments
     if not segs then return end
@@ -1181,7 +1201,8 @@ UpdateStackBar = function(barFrame)
 
     if cfg.showText ~= false and barFrame._text then
         if isSecret then
-            barFrame._text:SetText(stacksForText)
+            local last = barFrame._lastKnownStacks
+            barFrame._text:SetText(last and tostring(last) or "")
         else
             barFrame._text:SetText(tostring(stacks))
         end
@@ -1243,6 +1264,8 @@ local function UpdateRegularCooldownBar(barFrame)
         seg:SetMinMaxValues(0, 1)
         seg:SetValue(1)
     end
+
+    ApplyThresholdColor(barFrame, isOnCooldown and 0 or 1)
 
     if cfg.showText ~= false and barFrame._text then
         -- 调整文字位置：如果是圆环且没有指定 offset，尝试居中
@@ -1372,6 +1395,8 @@ local function UpdateChargeBar(barFrame)
             end
         end
     end
+
+    ApplyThresholdColor(barFrame, exactCharges)
 
     if cfg.showText ~= false and barFrame._text then
         if type(exactCharges) == "number" and exactCharges >= maxCharges then
@@ -1936,43 +1961,44 @@ function MB:OnCooldownUpdate()
     end
 end
 
-function MB:OnAuraUpdate(unit, unitAuraUpdateInfo)
-    local function UpdateDurationBars()
-        for _, f in pairs(activeFrames) do
-            if f._cfg and f._cfg.barType == "duration" then
-                 if f._cfg.unit == unit or (f._cfg.unit == nil and unit == "player") then
-                     f._needsDurationRefresh = true
-                 end
+local function MarkAuraIDInTouched(unit, auraInstanceID, touched)
+    local key = BuildAuraKey(unit, auraInstanceID)
+    if not key then return end
+    local bars = auraKeyToBarIDs[key]
+    if not bars then return end
+    for barID in pairs(bars) do
+        touched[barID] = true
+    end
+end
+
+local function MarkDurationBarsForUnit(unit)
+    for _, f in pairs(activeFrames) do
+        if f._cfg and f._cfg.barType == "duration" then
+            if f._cfg.unit == unit or (f._cfg.unit == nil and unit == "player") then
+                f._needsDurationRefresh = true
             end
         end
     end
+end
 
+function MB:OnAuraUpdate(unit, unitAuraUpdateInfo)
     if unit and unitAuraUpdateInfo and not unitAuraUpdateInfo.isFullUpdate then
         local touched = {}
-        local function MarkAuraID(auraInstanceID)
-            local key = BuildAuraKey(unit, auraInstanceID)
-            if not key then return end
-            local bars = auraKeyToBarIDs[key]
-            if not bars then return end
-            for barID in pairs(bars) do
-                touched[barID] = true
-            end
-        end
 
         if unitAuraUpdateInfo.updatedAuraInstanceIDs then
             for _, aid in ipairs(unitAuraUpdateInfo.updatedAuraInstanceIDs) do
-                MarkAuraID(aid)
+                MarkAuraIDInTouched(unit, aid, touched)
             end
         end
         if unitAuraUpdateInfo.removedAuraInstanceIDs then
             for _, aid in ipairs(unitAuraUpdateInfo.removedAuraInstanceIDs) do
-                MarkAuraID(aid)
+                MarkAuraIDInTouched(unit, aid, touched)
             end
         end
         if unitAuraUpdateInfo.addedAuras then
             for _, aura in ipairs(unitAuraUpdateInfo.addedAuras) do
                 if aura and aura.auraInstanceID then
-                    MarkAuraID(aura.auraInstanceID)
+                    MarkAuraIDInTouched(unit, aura.auraInstanceID, touched)
                 end
             end
         end
@@ -1984,7 +2010,7 @@ function MB:OnAuraUpdate(unit, unitAuraUpdateInfo)
                     UpdateStackBar(f)
                 end
             end
-            UpdateDurationBars()
+            MarkDurationBarsForUnit(unit)
             return
         end
     end
@@ -1997,7 +2023,7 @@ function MB:OnAuraUpdate(unit, unitAuraUpdateInfo)
             end
         end
     end
-    UpdateDurationBars()
+    MarkDurationBarsForUnit(unit)
 end
 
 function MB:OnSkyridingChanged()
