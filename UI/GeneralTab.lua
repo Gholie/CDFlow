@@ -90,7 +90,12 @@ function ns.BuildGeneralTab(scroll)
         cbQuiCompat:SetLabel(L.moduleQuiCompat)
         cbQuiCompat:SetValue(mods.quiCompat == true)
         cbQuiCompat:SetFullWidth(true)
-        cbQuiCompat:SetCallback("OnValueChanged", function(_, _, val) mods.quiCompat = val end)
+        cbQuiCompat:SetCallback("OnValueChanged", function(_, _, val)
+            mods.quiCompat = val
+            if ns.MonitorBars and ns.MonitorBars.RebuildAllBars then
+                ns.MonitorBars:RebuildAllBars()
+            end
+        end)
         moduleGroup:AddChild(cbQuiCompat)
 
         local descQuiCompat = AceGUI:Create("Label")
