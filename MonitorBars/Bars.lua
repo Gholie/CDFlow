@@ -85,15 +85,70 @@ end
 
 local hookedFrames = {}
 local frameToBarIDs = {}
+local auraKeyToBarIDs = {}
+local barIDToAuraKey = {}
 local UpdateStackBar
 
-local function OnCDMFrameChanged(frame)
+local function BuildAuraKey(unit, auraInstanceID)
+    if not HasAuraInstanceID(auraInstanceID) then return nil end
+    local unitToken = (type(unit) == "string" and unit ~= "") and unit or "player"
+    return unitToken .. "#" .. tostring(auraInstanceID)
+end
+
+local function UnlinkBarFromAura(barID)
+    local oldKey = barIDToAuraKey[barID]
+    if not oldKey then return end
+    local bars = auraKeyToBarIDs[oldKey]
+    if bars then
+        bars[barID] = nil
+        if not next(bars) then
+            auraKeyToBarIDs[oldKey] = nil
+        end
+    end
+    barIDToAuraKey[barID] = nil
+end
+
+local function LinkBarToAura(barFrame, unit, auraInstanceID)
+    if not barFrame or not barFrame._barID then return end
+    local key = BuildAuraKey(unit, auraInstanceID)
+    if not key then return end
+    local barID = barFrame._barID
+    local oldKey = barIDToAuraKey[barID]
+    if oldKey ~= key then
+        UnlinkBarFromAura(barID)
+    end
+    local bars = auraKeyToBarIDs[key]
+    if not bars then
+        bars = {}
+        auraKeyToBarIDs[key] = bars
+    end
+    bars[barID] = true
+    barIDToAuraKey[barID] = key
+    barFrame._trackedAuraInstanceID = auraInstanceID
+    barFrame._trackedUnit = unit
+end
+
+local function OnCDMFrameChanged(frame, ...)
+    local auraInstanceID, auraUnit
+    for i = 1, select("#", ...) do
+        local v = select(i, ...)
+        if not auraInstanceID and HasAuraInstanceID(v) then
+            auraInstanceID = v
+        end
+        if not auraUnit and type(v) == "string" then
+            auraUnit = v
+        end
+    end
     local ids = frameToBarIDs[frame]
     if not ids then return end
     for _, id in ipairs(ids) do
         local f = activeFrames[id]
         if f and f._cfg then
             if f._cfg.barType == "stack" then
+                if auraInstanceID then
+                    local trackedUnit = auraUnit or frame.auraDataUnit or f._cfg.unit or f._trackedUnit or "player"
+                    LinkBarToAura(f, trackedUnit, auraInstanceID)
+                end
                 UpdateStackBar(f)
             elseif f._cfg.barType == "duration" then
                 f._needsDurationRefresh = true
@@ -128,6 +183,8 @@ local function ClearAllHookRegistrations()
         hookedFrames[frame].barIDs = {}
         frameToBarIDs[frame] = {}
     end
+    wipe(auraKeyToBarIDs)
+    wipe(barIDToAuraKey)
 end
 
 local function AutoHookStackBars()
@@ -185,6 +242,8 @@ local function GetExactCount(barFrame, maxVal)
         local det = barFrame._arcDetectors[i]
         if det and det:GetStatusBarTexture():IsShown() then
             count = i
+        else
+            break
         end
     end
     return count
@@ -286,13 +345,16 @@ local function CreateSegments(barFrame, count, cfg)
     barFrame._segments = barFrame._segments or {}
     barFrame._segBGs = barFrame._segBGs or {}
     barFrame._segBorders = barFrame._segBorders or {}
+    barFrame._thresholdOverlays = barFrame._thresholdOverlays or {}  -- 阈值覆盖层
 
     for _, seg in ipairs(barFrame._segments) do seg:Hide() end
     for _, bg in ipairs(barFrame._segBGs) do bg:Hide() end
     for _, b in ipairs(barFrame._segBorders) do b:Hide() end
+    for _, overlay in ipairs(barFrame._thresholdOverlays) do overlay:Hide() end
     wipe(barFrame._segments)
     wipe(barFrame._segBGs)
     wipe(barFrame._segBorders)
+    wipe(barFrame._thresholdOverlays)
 
     if count < 1 then return end
 
@@ -321,13 +383,19 @@ local function CreateSegments(barFrame, count, cfg)
     local pxSegW_Base = math.floor(pxAvailableW / count)
     local pxRemainder = pxAvailableW % count
     
-    local barColor = cfg.barColor or { 0.2, 0.8, 0.2, 1 }
+    local baseColor = cfg.barColor or { 0.2, 0.8, 0.2, 1 }
     local bgColor = cfg.bgColor or { 0.1, 0.1, 0.1, 0.6 }
     local borderColor = cfg.borderColor or { 0, 0, 0, 1 }
     local texPath = BAR_TEXTURE
     if LSM and LSM.Fetch and cfg.barTexture then
         texPath = LSM:Fetch("statusbar", cfg.barTexture) or BAR_TEXTURE
     end
+
+    -- 阈值颜色配置（用于 stack 类型）
+    local threshold1 = cfg.colorThreshold or 0
+    local threshold2 = cfg.colorThreshold2 or 0
+    local thresholdColor1 = cfg.thresholdColor or { 1, 0.5, 0, 1 }
+    local thresholdColor2 = cfg.thresholdColor2 or { 1, 0, 0, 1 }
 
     -- 如果是圆环模式，使用 CooldownFrame 实现
     if cfg.barShape == "Ring" and cfg.barType == "duration" then
@@ -342,7 +410,7 @@ local function CreateSegments(barFrame, count, cfg)
         barFrame._segBGs[1] = bg
 
         -- 使用 CooldownFrame 作为进度显示
-        -- 技巧：将 SwipeTexture 设置为圆环纹理，并染色为 barColor
+        -- 技巧：将 SwipeTexture 设置为圆环纹理，并染色为 baseColor
         -- CooldownFrame 默认显示”冷却中”的黑色阴影，但我们可以通过 SetSwipeColor 改变它
         -- 并且利用冷却倒计时（从满到空）来模拟 buff 剩余时间（从满到空）
         local cd = CreateFrame("Cooldown", nil, container, "CooldownFrameTemplate")
@@ -350,7 +418,7 @@ local function CreateSegments(barFrame, count, cfg)
         cd:SetDrawEdge(false)
         cd:SetDrawBling(false)
         cd:SetSwipeTexture(ringTex)
-        cd:SetSwipeColor(barColor[1], barColor[2], barColor[3], barColor[4])
+        cd:SetSwipeColor(baseColor[1], baseColor[2], baseColor[3], baseColor[4])
         cd:SetHideCountdownNumbers(true)
         cd:SetUseCircularEdge(false) -- 关闭圆形边缘裁剪，确保纹理完整显示
         cd:EnableMouse(false)  -- 禁用鼠标交互以支持点击穿透
@@ -393,15 +461,82 @@ local function CreateSegments(barFrame, count, cfg)
         bar:SetPoint("TOPLEFT", container, "TOPLEFT", logX, 0)
         bar:SetSize(logSegW, logTotalH)
         bar:SetStatusBarTexture(texPath)
-        bar:SetStatusBarColor(barColor[1], barColor[2], barColor[3], barColor[4])
-        bar:SetMinMaxValues(0, 1)
+
+        -- 基础颜色（所有分段统一使用基础颜色）
+        bar:SetStatusBarColor(baseColor[1], baseColor[2], baseColor[3], baseColor[4])
+
+        if cfg.barType == "stack" then
+            bar:SetMinMaxValues(i - 1, i)
+        else
+            bar:SetMinMaxValues(0, 1)
+        end
         bar:SetValue(0)
         bar:SetFrameLevel(container:GetFrameLevel() + 1)
         bar:EnableMouse(false)  -- 禁用鼠标交互以支持点击穿透
         ConfigureStatusBar(bar)
-        
+
         if barFrame._mask then
             bar:GetStatusBarTexture():AddMaskTexture(barFrame._mask)
+        end
+
+        barFrame._segments[i] = bar
+
+        -- 为 stack 类型的所有分段创建阈值覆盖层
+        -- 关键：所有分段都需要覆盖层，这样达到阈值时整体变色
+        if cfg.barType == "stack" then
+            -- 第一阈值覆盖层
+            if threshold1 > 0 then
+                local overlay1 = CreateFrame("StatusBar", nil, container)
+                overlay1:SetPoint("TOPLEFT", container, "TOPLEFT", logX, 0)
+                overlay1:SetSize(logSegW, logTotalH)
+                overlay1:SetStatusBarTexture(texPath)
+                overlay1:SetStatusBarColor(thresholdColor1[1], thresholdColor1[2], thresholdColor1[3], thresholdColor1[4])
+                -- 关键逻辑：
+                -- 对于 i < threshold 的分段：SetMinMaxValues(threshold-1, threshold)
+                --   只有当 value >= threshold 时才显示，且一旦显示就完全填满
+                -- 对于 i >= threshold 的分段：SetMinMaxValues(i-1, i)
+                --   和基础分段相同的显示逻辑
+                if i < threshold1 then
+                    overlay1:SetMinMaxValues(threshold1 - 1, threshold1)
+                else
+                    overlay1:SetMinMaxValues(i - 1, i)
+                end
+                overlay1:SetValue(0)
+                overlay1:SetFrameLevel(container:GetFrameLevel() + 2)
+                overlay1:EnableMouse(false)
+                ConfigureStatusBar(overlay1)
+                if barFrame._mask then
+                    overlay1:GetStatusBarTexture():AddMaskTexture(barFrame._mask)
+                end
+                overlay1._isThresholdOverlay = 1
+                overlay1._segmentIndex = i
+                table.insert(barFrame._thresholdOverlays, overlay1)
+            end
+
+            -- 第二阈值覆盖层（优先级更高）
+            if threshold2 > 0 then
+                local overlay2 = CreateFrame("StatusBar", nil, container)
+                overlay2:SetPoint("TOPLEFT", container, "TOPLEFT", logX, 0)
+                overlay2:SetSize(logSegW, logTotalH)
+                overlay2:SetStatusBarTexture(texPath)
+                overlay2:SetStatusBarColor(thresholdColor2[1], thresholdColor2[2], thresholdColor2[3], thresholdColor2[4])
+                -- 同样的逻辑
+                if i < threshold2 then
+                    overlay2:SetMinMaxValues(threshold2 - 1, threshold2)
+                else
+                    overlay2:SetMinMaxValues(i - 1, i)
+                end
+                overlay2:SetValue(0)
+                overlay2:SetFrameLevel(container:GetFrameLevel() + 3)
+                overlay2:EnableMouse(false)
+                ConfigureStatusBar(overlay2)
+                if barFrame._mask then
+                    overlay2:GetStatusBarTexture():AddMaskTexture(barFrame._mask)
+                end
+                overlay2._isThresholdOverlay = 2
+                overlay2._segmentIndex = i
+                table.insert(barFrame._thresholdOverlays, overlay2)
+            end
         end
 
         if perSegBorder and borderSize > 0 then
@@ -501,9 +636,15 @@ function MB:CreateBarFrame(barCfg)
     local f = CreateFrame("Frame", "CDFlowMonitorBar" .. id, UIParent, "BackdropTemplate")
     local w, h = MB.getNearestPixel(barCfg.width, barCfg.scale), MB.getNearestPixel(barCfg.height, barCfg.scale)
     f:SetSize(w, h)
-    local pX = MB.getNearestPixel(barCfg.posX, barCfg.scale)
-    local pY = MB.getNearestPixel(barCfg.posY, barCfg.scale)
-    f:SetPoint("CENTER", UIParent, "CENTER", pX, pY)
+    local isFrameAnchored = barCfg.anchorFrame and barCfg.anchorFrame ~= "" and barCfg.anchorFrame ~= "__CUSTOM__"
+    if isFrameAnchored then
+        f:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+        f._frameAnchored = true
+    else
+        local pX = MB.getNearestPixel(barCfg.posX, barCfg.scale)
+        local pY = MB.getNearestPixel(barCfg.posY, barCfg.scale)
+        f:SetPoint("CENTER", UIParent, "CENTER", pX, pY)
+    end
     local strata = barCfg.frameStrata or "MEDIUM"
     local baseLevel = GetBaseFrameLevelByStrata(strata)
     f:SetFrameStrata(strata)
@@ -576,11 +717,12 @@ function MB:CreateBarFrame(barCfg)
     f:SetMovable(true)
     f:RegisterForDrag("LeftButton")
 
-    -- 初始化鼠标交互状态（解锁时启用，锁定时禁用以实现点击穿透）
+    -- 帧锚点模式下鼠标永久禁用（跟随帧移动，无法手动拖拽）
     local locked = ns.db and ns.db.monitorBars and ns.db.monitorBars.locked
-    f:EnableMouse(not locked)
+    f:EnableMouse(not locked and not isFrameAnchored)
     f:SetScript("OnDragStart", function(self)
         if ns.db.monitorBars.locked then return end
+        if self._frameAnchored then return end
         
         self:SetToplevel(true)
         local effScale = self:GetEffectiveScale()
@@ -665,6 +807,7 @@ function MB:CreateBarFrame(barCfg)
 
     f:SetScript("OnMouseWheel", function(self, delta)
         if ns.db.monitorBars.locked then return end
+        if self._frameAnchored then return end
         local effScale = self:GetEffectiveScale()
         local pp = MB.getPixelPerfectScale(effScale)
         
@@ -875,28 +1018,64 @@ end
 -- 更新逻辑
 ------------------------------------------------------
 
-local function ApplySegmentColors(barFrame, currentCount)
+local function ApplyThresholdColor(barFrame, currentCount)
     local cfg = barFrame._cfg
     if not cfg then return end
     local segs = barFrame._segments
     if not segs then return end
-
     local threshold1 = cfg.colorThreshold or 0
     local threshold2 = cfg.colorThreshold2 or 0
     local c = cfg.barColor or { 0.2, 0.8, 0.2, 1 }
-
     if type(currentCount) == "number" then
-        -- 优先判断第二段阈值（更高的阈值）
         if threshold2 > 0 and currentCount >= threshold2 then
             c = cfg.thresholdColor2 or { 1, 0, 0, 1 }
         elseif threshold1 > 0 and currentCount >= threshold1 then
             c = cfg.thresholdColor or { 1, 0.5, 0, 1 }
         end
     end
-
     for _, seg in ipairs(segs) do
         seg:SetStatusBarColor(c[1], c[2], c[3], c[4])
     end
+end
+
+local function SetStackSegmentsValue(barFrame, value)
+    local segs = barFrame._segments
+    if not segs then return end
+    for i = 1, #segs do
+        segs[i]:SetValue(value)
+    end
+    -- 同时更新阈值覆盖层
+    local overlays = barFrame._thresholdOverlays
+    if overlays then
+        for i = 1, #overlays do
+            overlays[i]:SetValue(value)
+        end
+    end
+end
+
+local function GetAuraDataByInstanceID(auraInstanceID, preferredUnit, secondUnit)
+    if not HasAuraInstanceID(auraInstanceID) then return nil, nil end
+    local units, exists = {}, {}
+    local function AddUnit(u)
+        if type(u) == "string" and u ~= "" and not exists[u] then
+            exists[u] = true
+            units[#units + 1] = u
+        end
+    end
+    AddUnit(preferredUnit)
+    AddUnit(secondUnit)
+    AddUnit("player")
+    AddUnit("target")
+    AddUnit("pet")
+    AddUnit("vehicle")
+    AddUnit("focus")
+    for _, unit in ipairs(units) do
+        local auraData = C_UnitAuras.GetAuraDataByAuraInstanceID(unit, auraInstanceID)
+        if auraData then
+            return auraData, unit
+        end
+    end
+    return nil, nil
 end
 
 UpdateStackBar = function(barFrame)
@@ -918,29 +1097,29 @@ UpdateStackBar = function(barFrame)
             barFrame._cdmFrame = cdmFrame
 
             if HasAuraInstanceID(cdmFrame.auraInstanceID) then
-                auraActive = true
-                local unit = cdmFrame.auraDataUnit or cfg.unit or "player"
-                local auraData = C_UnitAuras.GetAuraDataByAuraInstanceID(unit, cdmFrame.auraInstanceID)
-                if not auraData then
-                    local other = (unit == "player") and "target" or "player"
-                    auraData = C_UnitAuras.GetAuraDataByAuraInstanceID(other, cdmFrame.auraInstanceID)
+                local baseUnit = cdmFrame.auraDataUnit or cfg.unit or barFrame._trackedUnit or "player"
+                local auraData, trackedUnit = GetAuraDataByInstanceID(cdmFrame.auraInstanceID, baseUnit, barFrame._trackedUnit)
+                if trackedUnit then
+                    LinkBarToAura(barFrame, trackedUnit, cdmFrame.auraInstanceID)
+                else
+                    LinkBarToAura(barFrame, baseUnit, cdmFrame.auraInstanceID)
                 end
                 if auraData then
+                    auraActive = true
                     stacks = auraData.applications or 0
                 end
-                barFrame._trackedAuraInstanceID = cdmFrame.auraInstanceID
             end
         end
     end
 
     if not auraActive and HasAuraInstanceID(barFrame._trackedAuraInstanceID) then
-        local auraData = C_UnitAuras.GetAuraDataByAuraInstanceID("player", barFrame._trackedAuraInstanceID)
-        if not auraData then
-            auraData = C_UnitAuras.GetAuraDataByAuraInstanceID("target", barFrame._trackedAuraInstanceID)
-        end
+        local auraData, trackedUnit = GetAuraDataByInstanceID(barFrame._trackedAuraInstanceID, barFrame._trackedUnit, cfg.unit)
         if auraData then
             auraActive = true
             stacks = auraData.applications or 0
+            if trackedUnit then
+                LinkBarToAura(barFrame, trackedUnit, barFrame._trackedAuraInstanceID)
+            end
         end
     end
 
@@ -952,6 +1131,8 @@ UpdateStackBar = function(barFrame)
                 barFrame._lastKnownActive = false
                 barFrame._lastKnownStacks = 0
                 barFrame._trackedAuraInstanceID = nil
+                barFrame._trackedUnit = nil
+                UnlinkBarFromAura(barFrame._barID)
                 stacks = 0
             end
         end
@@ -962,25 +1143,14 @@ UpdateStackBar = function(barFrame)
     local isSecret = issecretvalue and issecretvalue(stacks)
     local rawStacks = stacks
 
-    local stacksResolved = true
+    local stacksResolved = not isSecret
     local maxStacks = cfg.maxStacks or 5
+    local stacksForColor = stacks
+    local stacksForText = stacks
     local segs = barFrame._segments
     if segs then
-        -- Arc detection（修改 stacks 的值，不直接渲染）
         if isSecret then
-            local lastFeed = barFrame._arcFeedFrame or 0
-            if lastFeed == frameTick then
-                stacks = barFrame._arcResolvedStacks or 0
-            elseif lastFeed > 0 then
-                stacks = GetExactCount(barFrame, maxStacks)
-            else
-                stacksResolved = false
-            end
-            FeedArcDetectors(barFrame, rawStacks, maxStacks)
-            barFrame._arcFeedFrame = frameTick
-            if stacksResolved then
-                barFrame._arcResolvedStacks = stacks
-            end
+            stacksForText = rawStacks
         else
             barFrame._arcFeedFrame = 0
             if barFrame._arcDetectors then
@@ -991,44 +1161,51 @@ UpdateStackBar = function(barFrame)
             end
         end
 
-        -- 设置动画目标，波形渲染由 AnimateStackBars 每帧处理
-        if stacksResolved then
+        if isSecret then
+            barFrame._displayStacks = nil
+            barFrame._targetStacks = nil
+            SetStackSegmentsValue(barFrame, rawStacks)
+            FeedArcDetectors(barFrame, rawStacks, maxStacks)
+            local resolved = GetExactCount(barFrame, maxStacks)
+            if type(resolved) == "number" then
+                stacksForColor = resolved
+                stacksResolved = true
+            else
+                stacksResolved = false
+            end
+        elseif stacksResolved then
             local prevDisplay = barFrame._displayStacks
             local smooth = (cfg.smoothAnimation ~= false)
             if prevDisplay == nil or not smooth then
-                -- 首次初始化或禁用平滑动画：直接跳至当前层数
                 barFrame._displayStacks = stacks
                 barFrame._targetStacks  = stacks
-                for i = 1, #segs do
-                    segs[i]:SetValue(i <= stacks and 1 or 0)
-                end
-                ApplySegmentColors(barFrame, stacks)
+                SetStackSegmentsValue(barFrame, stacks)
             else
                 barFrame._targetStacks = stacks
                 if stacks < prevDisplay then
-                    -- 层数减少：立即收回，响应迅速
                     barFrame._displayStacks = stacks
-                    for i = 1, #segs do
-                        segs[i]:SetValue(i <= stacks and 1 or 0)
-                    end
-                    ApplySegmentColors(barFrame, stacks)
+                    SetStackSegmentsValue(barFrame, stacks)
                 end
-                -- 层数增加的部分由 AnimateStackBars 的波形动画处理
             end
         end
     end
 
     if auraActive then
         barFrame._lastKnownActive = true
-        barFrame._lastKnownStacks = (not isSecret) and stacks or (barFrame._lastKnownStacks or 0)
+        if not isSecret and type(stacks) == "number" then
+            barFrame._lastKnownStacks = stacks
+        elseif stacksResolved and type(stacksForColor) == "number" then
+            barFrame._lastKnownStacks = stacksForColor
+        end
     end
 
-    if stacksResolved then
-        ApplySegmentColors(barFrame, stacks)
-    end
-
-    if stacksResolved and cfg.showText ~= false and barFrame._text then
-        barFrame._text:SetText(tostring(stacks))
+    if cfg.showText ~= false and barFrame._text then
+        if isSecret then
+            local last = barFrame._lastKnownStacks
+            barFrame._text:SetText(last and tostring(last) or "")
+        else
+            barFrame._text:SetText(tostring(stacks))
+        end
     end
 end
 
@@ -1088,7 +1265,7 @@ local function UpdateRegularCooldownBar(barFrame)
         seg:SetValue(1)
     end
 
-    ApplySegmentColors(barFrame, isOnCooldown and 0 or 1)
+    ApplyThresholdColor(barFrame, isOnCooldown and 0 or 1)
 
     if cfg.showText ~= false and barFrame._text then
         -- 调整文字位置：如果是圆环且没有指定 offset，尝试居中
@@ -1219,7 +1396,7 @@ local function UpdateChargeBar(barFrame)
         end
     end
 
-    ApplySegmentColors(barFrame, exactCharges)
+    ApplyThresholdColor(barFrame, exactCharges)
 
     if cfg.showText ~= false and barFrame._text then
         if type(exactCharges) == "number" and exactCharges >= maxCharges then
@@ -1407,6 +1584,91 @@ local function UpdateDurationBar(barFrame)
 end
 
 ------------------------------------------------------
+-- 帧锚点（Frame Anchor）支持
+------------------------------------------------------
+
+-- 逻辑锚点键：映射到 CDM 查看器帧，自动适配 QUI / 原生
+local LOGICAL_ANCHOR_FRAMES = {
+    -- Native WoW Cooldown Manager viewers (shown when QUI compat is OFF)
+    CDM_Essential = function() return rawget(_G, "EssentialCooldownViewer") end,
+    CDM_Utility   = function() return rawget(_G, "UtilityCooldownViewer") end,
+    CDM_BuffIcon  = function() return rawget(_G, "BuffIconCooldownViewer") end,
+    -- QUI-hosted CDM viewers (shown when QUI compat is ON)
+    QUI_Essential = function()
+        local fn = rawget(_G, "QUI_GetCDMViewerFrame")
+        return fn and fn("essential")
+    end,
+    QUI_Utility = function()
+        local fn = rawget(_G, "QUI_GetCDMViewerFrame")
+        return fn and fn("utility")
+    end,
+    QUI_BuffIcon = function()
+        local fn = rawget(_G, "QUI_GetCDMViewerFrame")
+        return fn and fn("buffIcon")
+    end,
+    -- QUI power bars: resolve via QUI.QUICore to get the real frame, bypassing the
+    -- hidden placeholder that QUI pre-registers globally before full initialization.
+    -- QUICore is stored as QUI.QUICore (an Ace3 module), not as a bare global.
+    QUIPowerBar = function()
+        local qui = rawget(_G, "QUI")
+        local core = qui and qui.QUICore
+        if core and core.powerBar then return core.powerBar end
+        return rawget(_G, "QUIPowerBar")
+    end,
+    QUISecondaryPowerBar = function()
+        local qui = rawget(_G, "QUI")
+        local core = qui and qui.QUICore
+        if core and core.secondaryPowerBar then return core.secondaryPowerBar end
+        return rawget(_G, "QUISecondaryPowerBar")
+    end,
+    QUI_AltPowerBar = function()
+        return rawget(_G, "QUI_AltPowerBar")
+    end,
+}
+
+local function ResolveAnchorFrame(name)
+    if not name or name == "" or name == "__CUSTOM__" then return nil end
+    local resolver = LOGICAL_ANCHOR_FRAMES[name]
+    if resolver then return resolver() end
+    return rawget(_G, name)
+end
+MB.ResolveAnchorFrame = ResolveAnchorFrame
+
+local function UpdateFrameAnchor(f, cfg)
+    local anchorFr = ResolveAnchorFrame(cfg.anchorFrame)
+    if not anchorFr or not anchorFr:IsShown() then
+        if f:IsShown() then f:Hide() end
+        return
+    end
+    if not ShouldBarBeVisible(cfg, f) then
+        if f:IsShown() then f:Hide() end
+        return
+    end
+    -- Auto-width: match anchor frame width, rebuild when it changes.
+    -- Use cfg._lastAnchorWidth (not f._lastAnchorWidth) so it survives RebuildAllBars.
+    if cfg.autoWidth and not f._autoWidthPending then
+        local aw = anchorFr:GetWidth()
+        if aw and aw > 1 and math.abs((cfg._lastAnchorWidth or 0) - aw) >= 2 then
+            cfg._lastAnchorWidth = aw
+            cfg.width = MB.getNearestPixel(aw + (cfg.autoWidthOffset or 0))
+            f._autoWidthPending = true
+            C_Timer.After(0.1, function()
+                f._autoWidthPending = nil
+                MB:RebuildAllBars()
+            end)
+            return
+        end
+    end
+    local ap = cfg.anchorPoint    or "TOP"
+    local rp = cfg.anchorRelPoint or "BOTTOM"
+    local ox = cfg.anchorOffX     or 0
+    local oy = cfg.anchorOffY     or -2
+    f:ClearAllPoints()
+    f:SetPoint(ap, anchorFr, rp, ox, oy)
+    if not f:IsShown() then f:Show() end
+end
+
+------------------------------------------------------
 -- OnUpdate 循环
 ------------------------------------------------------
 
@@ -1417,6 +1679,9 @@ local function UpdateAllBars()
     for _, barCfg in ipairs(bars) do
         local f = activeFrames[barCfg.id]
         if f and barCfg.enabled and barCfg.spellID > 0 then
+            if f._frameAnchored then
+                UpdateFrameAnchor(f, barCfg)
+            end
             if barCfg.barType == "stack" then
                 UpdateStackBar(f)
             elseif barCfg.barType == "charge" then
@@ -1446,10 +1711,7 @@ local function AnimateStackBars(dt)
 
                 local segs = barFrame._segments
                 if segs then
-                    for i = 1, #segs do
-                        -- 波形进度：第 i 格在 display-(i-1) 处，clamp 到 [0,1]
-                        segs[i]:SetValue(math.max(0, math.min(1, display - (i - 1))))
-                    end
+                    SetStackSegmentsValue(barFrame, display)
                 end
             end
         end
@@ -1593,7 +1855,9 @@ function MB:InitAllBars()
                 end
             end)
 
-            if ShouldBarBeVisible(barCfg, f) then
+            if f._frameAnchored then
+                UpdateFrameAnchor(f, barCfg)
+            elseif ShouldBarBeVisible(barCfg, f) then
                 f:Show()
             else
                 f:Hide()
@@ -1613,6 +1877,7 @@ end
 function MB:DestroyBar(barID)
     local f = activeFrames[barID]
     if f then
+        UnlinkBarFromAura(barID)
         f:Hide()
         f:SetParent(nil)
         activeFrames[barID] = nil
@@ -1625,6 +1890,8 @@ function MB:DestroyAllBars()
         f:SetParent(nil)
     end
     wipe(activeFrames)
+    wipe(auraKeyToBarIDs)
+    wipe(barIDToAuraKey)
     wipe(ns.cdmSuppressedCooldownIDs)
     updateFrame:Hide()
 end
@@ -1637,7 +1904,11 @@ end
 local function RefreshBarVisibility()
     for _, f in pairs(activeFrames) do
         if f._cfg then
-            f:SetShown(ShouldBarBeVisible(f._cfg, f))
+            if f._frameAnchored then
+                UpdateFrameAnchor(f, f._cfg)
+            else
+                f:SetShown(ShouldBarBeVisible(f._cfg, f))
+            end
         end
     end
 end
@@ -1690,14 +1961,69 @@ function MB:OnCooldownUpdate()
     end
 end
 
-function MB:OnAuraUpdate(unit)
+local function MarkAuraIDInTouched(unit, auraInstanceID, touched)
+    local key = BuildAuraKey(unit, auraInstanceID)
+    if not key then return end
+    local bars = auraKeyToBarIDs[key]
+    if not bars then return end
+    for barID in pairs(bars) do
+        touched[barID] = true
+    end
+end
+
+local function MarkDurationBarsForUnit(unit)
     for _, f in pairs(activeFrames) do
         if f._cfg and f._cfg.barType == "duration" then
-             if f._cfg.unit == unit or (f._cfg.unit == nil and unit == "player") then
-                 f._needsDurationRefresh = true
-             end
+            if f._cfg.unit == unit or (f._cfg.unit == nil and unit == "player") then
+                f._needsDurationRefresh = true
+            end
         end
     end
+end
+
+function MB:OnAuraUpdate(unit, unitAuraUpdateInfo)
+    if unit and unitAuraUpdateInfo and not unitAuraUpdateInfo.isFullUpdate then
+        local touched = {}
+
+        if unitAuraUpdateInfo.updatedAuraInstanceIDs then
+            for _, aid in ipairs(unitAuraUpdateInfo.updatedAuraInstanceIDs) do
+                MarkAuraIDInTouched(unit, aid, touched)
+            end
+        end
+        if unitAuraUpdateInfo.removedAuraInstanceIDs then
+            for _, aid in ipairs(unitAuraUpdateInfo.removedAuraInstanceIDs) do
+                MarkAuraIDInTouched(unit, aid, touched)
+            end
+        end
+        if unitAuraUpdateInfo.addedAuras then
+            for _, aura in ipairs(unitAuraUpdateInfo.addedAuras) do
+                if aura and aura.auraInstanceID then
+                    MarkAuraIDInTouched(unit, aura.auraInstanceID, touched)
+                end
+            end
+        end
+
+        if next(touched) then
+            for barID in pairs(touched) do
+                local f = activeFrames[barID]
+                if f and f._cfg and f._cfg.barType == "stack" then
+                    UpdateStackBar(f)
+                end
+            end
+            MarkDurationBarsForUnit(unit)
+            return
+        end
+    end
+
+    for _, f in pairs(activeFrames) do
+        if f._cfg and f._cfg.barType == "stack" then
+            local cfgUnit = f._cfg.unit or "player"
+            if cfgUnit == unit or f._trackedUnit == unit or (cfgUnit == "target" and unit == "target") then
+                UpdateStackBar(f)
+            end
+        end
+    end
+    MarkDurationBarsForUnit(unit)
 end
 
 function MB:OnSkyridingChanged()
@@ -1713,7 +2039,9 @@ function MB:OnTargetChanged()
     for _, f in pairs(activeFrames) do
         if f._cfg then
             if f._cfg.unit == "target" then
+                UnlinkBarFromAura(f._barID)
                 f._trackedAuraInstanceID = nil
+                f._trackedUnit = nil
             end
             f:SetShown(ShouldBarBeVisible(f._cfg, f))
         end
@@ -1723,11 +2051,11 @@ end
 function MB:SetLocked(locked)
     ns.db.monitorBars.locked = locked
     for _, f in pairs(activeFrames) do
-        -- 更新鼠标交互状态：锁定时禁用（点击穿透），解锁时启用
-        f:EnableMouse(not locked)
-        f:EnableMouseWheel(not locked)
+        local anchored = f._frameAnchored
+        f:EnableMouse(not locked and not anchored)
+        f:EnableMouseWheel(not locked and not anchored)
         if f._posLabel then
-            if locked then
+            if locked or anchored then
                 f._posLabel:Hide()
             else
                 local cfg = f._cfg

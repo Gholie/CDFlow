@@ -21,6 +21,11 @@ local Style = ns.Style
 local floor = math.floor
 local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
 
+local function IsQuiCompatActive()
+    return rawget(_G, "QUI_RefreshNCDM") ~= nil
+        and (ns.db ~= nil and ns.db.modules ~= nil and ns.db.modules.quiCompat == true)
+end
+
 local VIEWER_KEY = {
     EssentialCooldownViewer = "essential",
     UtilityCooldownViewer   = "utility",
@@ -223,6 +228,7 @@ function Layout:RefreshBuffViewer(viewer, cfg)
     viewer._cdf_buffRefreshing = true
 
     local db = ns.db
+    local quiPresent = IsQuiCompatActive()
     local w, h = cfg.iconWidth, cfg.iconHeight
 
     if ns.Visibility and ns.Visibility.IsViewerVisible
@@ -399,15 +405,19 @@ function Layout:RefreshBuffViewer(viewer, cfg)
     for icon in pairs(visibleSet) do
         icon._cdf_viewerKey = "buffs"
         Style:ApplyIcon(icon, w, h, db.iconZoom, db.borderSize)
-        Style:ApplyStack(icon, cfg.stack)
+        if not quiPresent then
+            Style:ApplyStack(icon, cfg.stack)
+        end
         Style:ApplyKeybind(icon, cfg)
-        Style:ApplyCooldownText(icon, cfg)
+        if not quiPresent then
+            Style:ApplyCooldownText(icon, cfg)
+        end
         Style:ApplySwipeOverlay(icon)
     end
 
     -- 主组定位（同步，不 re-parent，不 OnUpdate）
     local mainCount = #mainAll
-    if #mainVisible > 0 then
+    if not quiPresent and #mainVisible > 0 then
         if doCenter then
             -- CENTER: 在 iconLimit 槽位内动态居中（与 viewer 物理宽度匹配）
             if isH then
@@ -425,12 +435,12 @@ function Layout:RefreshBuffViewer(viewer, cfg)
         end
     end
     -- 自定义分组定位（无论哪种模式，分组总是独立定位）
-    if hasGroups and next(groupBuckets) then
+    if not quiPresent and hasGroups and next(groupBuckets) then
         self:RefreshBuffGroups(groupBuckets, w, h, cfg)
     end
 
     -- 启动 OnUpdate 居中监控，持续检测 buff 可见性变化并自动修正位置
-    if #mainVisible > 0 or next(groupBuckets) then
+    if not quiPresent and (#mainVisible > 0 or next(groupBuckets)) then
         Layout.EnableBuffCentering()
     end
 
@@ -511,6 +521,7 @@ function Layout:RefreshCDViewer(viewer, cfg)
     local visible, _ = SplitVisible(allIcons)
 
     local db = ns.db
+    local quiPresent = IsQuiCompatActive()
     local isH = (viewer.isHorizontal ~= false)
     local iconDir = (viewer.iconDirection == 1) and 1 or -1
 
@@ -549,10 +560,14 @@ function Layout:RefreshCDViewer(viewer, cfg)
         for _, icon in ipairs(row) do
             icon._cdf_viewerKey = viewerKey
             Style:ApplyIcon(icon, info.w, info.h, db.iconZoom, db.borderSize)
-            Style:ApplyStack(icon, cfg.stack)
+            if not quiPresent then
+                Style:ApplyStack(icon, cfg.stack)
+            end
             Style:ApplyKeybind(icon, cfg)
             Style:ApplySwipeOverlay(icon)
-            Style:ApplyCooldownText(icon, cfg)
+            if not quiPresent then
+                Style:ApplyCooldownText(icon, cfg)
+            end
         end
     end
 

@@ -9,6 +9,7 @@ ns.defaults = {
         trackedBars = true,
         itemMonitor = true,
         tts         = true,
+        quiCompat   = false,
     },
 
     -- 全局样式
